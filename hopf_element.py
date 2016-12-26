@@ -11,16 +11,21 @@ import numpy as np
 import scipy.signal as sig
 import matplotlib.pyplot as plt
 import pdb
+
+
 from scipy.integrate import odeint
+
+from sklearn import preprocessing as pproc
+
 plt.close('all')
 
 
 input_val = []
 
-def Hopf(state,t):
+def DEPRHopf(state,t):
     x = state[0]
     y = state[1]
-    mu = 1
+    mu = 1.0
     
     xd = mu * x - y - x * (x**2 + y**2)
     yd = x + mu * y - y * (x**2 + y**2)
@@ -35,29 +40,35 @@ class HopfNet():
         self.params = np.array([0,0,0,0,0])
     
     def plot_flow(self):
-        xd = np.linspace(-10.0,10.0,100)
-        yd = np.linspace(-10.0,10.0,100)
+        xd = np.linspace(-5.0,5.0,100)
+        yd = np.linspace(-5.0,5.0,100)
         X,Y = np.meshgrid(xd,yd)
         
         XX = np.array([X.ravel(),Y.ravel()])
-        Z = np.array(self.norm_form(XX,mu=-1.0))
+        Z = np.array(self.norm_form(XX,t=0,mu=1.0))
+        #unit norm the Z vectors
+        Z_n = pproc.normalize(Z.T,norm='l2').T
         #Z = Z.reshape(X.T.shape)
                 
         plt.figure()
-        plt.quiver(X,Y,Z[0,:],Z[1,:])
+        plt.quiver(X,Y,Z_n[0,:],Z_n[1,:])
+        #overlay a trajectory
+        traj = self.trajectory([12.0,13.0])
+        plt.scatter(traj[:,0],traj[:,1])
         
         plt.show()
         self.flow = Z
     
     def trajectory(self,state0):
         t = np.arange(0.0,30.0,0.01)
+        
         traj = odeint(self.norm_form,state0,t)
         
         return traj
         
-    def norm_form(self,state,mu=1.0):
-        x = np.squeeze(state[0])
-        y = np.squeeze(state[1])
+    def norm_form(self,state,t,mu=1.0):
+        x = state[0]
+        y = state[1]
         
         xd = mu * x - y - x * (x**2 + y**2)
         yd = x + mu * y - y * (x**2 + y**2)

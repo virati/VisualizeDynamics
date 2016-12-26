@@ -37,11 +37,12 @@ class HopfNet():
     params = np.array([])
     flow = []
     mu = 1.0
+    current_state = [3.0,4.0]
     
     def __init__(self):
         self.params = np.array([0,0,0,0,0])
     
-    def plot_flow(self,mu=1.0,state0=[3.0,4.0]):
+    def plot_flow(self,mu=1.0):
         xd = np.linspace(-5.0,5.0,100)
         yd = np.linspace(-5.0,5.0,100)
         X,Y = np.meshgrid(xd,yd)
@@ -59,12 +60,17 @@ class HopfNet():
         plt.quiver(X,Y,Z_n[0,:],Z_n[1,:])
         
         #overlay a trajectory
+        state0 = self.current_state
+        
         traj = self.trajectory(state0)
         plt.scatter(traj[:,0],traj[:,1])
         
         plt.subplot(212)
         plt.plot(traj)
         #plt.show()
+        
+        #the trajectory just ran, so let's just set the last state as the current state
+        self.current_state = traj[-1,:]
         
         self.flow = Z
     
@@ -81,10 +87,19 @@ class HopfNet():
         
         mu = self.mu
         
-        xd = mu * x - y - x * (x**2 + y**2)
-        yd = x + mu * y - y * (x**2 + y**2)
+        #these two can shape peakiness, be used for PAC?
+        w = 0.5
+        q = 1-w
+        
+        
+        
+        xd = w * (mu * x - y - x * (x**2 + y**2))
+        yd = q * (x + mu * y - y * (x**2 + y**2))
     
-        return [xd,yd]
+        freq_fact = 5
+        outv = freq_fact * np.array([xd,yd])
+        
+        return outv
         
     def DEPRflow_field(self,Z,mu):
         #Z = np.sum(Z,0)
@@ -115,7 +130,27 @@ class HopfNet():
 
 import time
 
-for mu in np.linspace(-1.0,1.0,5):
-    simpleNet = HopfNet()
-    simpleNet.plot_flow(mu=mu,state0=[-3,0])
-    #traj = simpleNet.trajectory([12.0,13.0])
+if 0:
+    for mu in np.linspace(-1.0,10.0,5):
+        simpleNet = HopfNet()
+        simpleNet.plot_flow(mu=mu)
+        #traj = simpleNet.trajectory([12.0,13.0])
+    
+#%%
+#Now we're going to stage our dynamical system -> this is MODELING SWITCHING
+#from t=0 to 5 seconds, we'll have mu = -1
+#then we switch to mu = 1
+
+#This is SHIT right now
+tvect = np.linspace(0,10,10)
+simpleNet = HopfNet()
+
+for tt in tvect:
+    if tt < 5:
+        tmu = -1
+    elif tt >= 5:
+        tmu = 1
+        
+    simpleNet.plot_flow(mu=tmu)
+    
+plt.show()

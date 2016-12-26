@@ -36,27 +36,36 @@ def DEPRHopf(state,t):
 class HopfNet():
     params = np.array([])
     flow = []
+    mu = 1.0
+    
     def __init__(self):
         self.params = np.array([0,0,0,0,0])
     
-    def plot_flow(self):
+    def plot_flow(self,mu=1.0,state0=[3.0,4.0]):
         xd = np.linspace(-5.0,5.0,100)
         yd = np.linspace(-5.0,5.0,100)
         X,Y = np.meshgrid(xd,yd)
         
         XX = np.array([X.ravel(),Y.ravel()])
-        Z = np.array(self.norm_form(XX,t=0,mu=1.0))
+        self.mu = mu
+        
+        Z = np.array(self.norm_form(XX,t=0))
         #unit norm the Z vectors
         Z_n = pproc.normalize(Z.T,norm='l2').T
         #Z = Z.reshape(X.T.shape)
                 
         plt.figure()
+        plt.subplot(211)
         plt.quiver(X,Y,Z_n[0,:],Z_n[1,:])
+        
         #overlay a trajectory
-        traj = self.trajectory([12.0,13.0])
+        traj = self.trajectory(state0)
         plt.scatter(traj[:,0],traj[:,1])
         
-        plt.show()
+        plt.subplot(212)
+        plt.plot(traj)
+        #plt.show()
+        
         self.flow = Z
     
     def trajectory(self,state0):
@@ -66,9 +75,11 @@ class HopfNet():
         
         return traj
         
-    def norm_form(self,state,t,mu=1.0):
+    def norm_form(self,state,t):
         x = state[0]
         y = state[1]
+        
+        mu = self.mu
         
         xd = mu * x - y - x * (x**2 + y**2)
         yd = x + mu * y - y * (x**2 + y**2)
@@ -102,12 +113,9 @@ class HopfNet():
 #t = np.arange(0.0,30.0,0.01)
 #traj = odeint(Hopf,state0,t)
 
-    
+import time
 
-simpleNet = HopfNet()
-simpleNet.plot_flow()
-traj = simpleNet.trajectory([12.0,13.0])
-
-plt.figure()
-plt.scatter(traj[:,0],traj[:,1],c=t)
-plt.show()
+for mu in np.linspace(-1.0,1.0,5):
+    simpleNet = HopfNet()
+    simpleNet.plot_flow(mu=mu,state0=[-3,0])
+    #traj = simpleNet.trajectory([12.0,13.0])

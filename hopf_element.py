@@ -38,9 +38,12 @@ class HopfNet():
     flow = []
     mu = 1.0
     current_state = [3.0,4.0]
+    fc = 0
+    traj = {}
     
-    def __init__(self):
+    def __init__(self,center_freq=5):
         self.params = np.array([0,0,0,0,0])
+        self.fc = center_freq
     
     def plot_flow(self,mu=1.0):
         xd = np.linspace(-5.0,5.0,100)
@@ -62,24 +65,39 @@ class HopfNet():
         #overlay a trajectory
         state0 = self.current_state
         
-        traj = self.trajectory(state0)
+        tvect,traj = self.trajectory(state0)
         plt.scatter(traj[:,0],traj[:,1])
         
         plt.subplot(212)
-        plt.plot(traj)
+        plt.plot(tvect,traj)
         #plt.show()
         
+        #the timeseries of the trajectory
+        self.traj = {'X':traj,'T':tvect}
         #the trajectory just ran, so let's just set the last state as the current state
-        self.current_state = traj[-1,:]
+        #self.current_state = traj[-1,:]
         
         self.flow = Z
     
+    def tf_traj(self):
+        #do TF analyses on trajectory
+        tvect = self.traj['T']
+        X = self.traj['X']
+        
+        plt.figure()
+        plt.subplot(121)
+        F,T,SG = sig.spectrogram(X[:,0],nperseg=512,noverlap=256,window=sig.get_window('blackmanharris',512),fs=100)
+        plt.pcolormesh(T,F,10*np.log10(SG))  
+        plt.subplot(122)
+        F,T,SG = sig.spectrogram(X[:,1],nperseg=512,noverlap=256,window=sig.get_window('blackmanharris',512),fs=100)
+        plt.pcolormesh(T,F,10*np.log10(SG))  
+        
     def trajectory(self,state0):
         t = np.arange(0.0,30.0,0.01)
         
         traj = odeint(self.norm_form,state0,t)
         
-        return traj
+        return t,traj
         
     def norm_form(self,state,t):
         x = state[0]
@@ -96,7 +114,8 @@ class HopfNet():
         xd = w * (mu * x - y - x * (x**2 + y**2))
         yd = q * (x + mu * y - y * (x**2 + y**2))
     
-        freq_fact = 5
+        freq_fact = self.fc
+        
         outv = freq_fact * np.array([xd,yd])
         
         return outv
@@ -130,27 +149,27 @@ class HopfNet():
 
 import time
 
-if 0:
-    for mu in np.linspace(-1.0,10.0,5):
-        simpleNet = HopfNet()
+if 1:
+    for mu in [2.0]:
+        simpleNet = HopfNet(center_freq=140)
         simpleNet.plot_flow(mu=mu)
         #traj = simpleNet.trajectory([12.0,13.0])
-    
-#%%
-#Now we're going to stage our dynamical system -> this is MODELING SWITCHING
-#from t=0 to 5 seconds, we'll have mu = -1
-#then we switch to mu = 1
-
-#This is SHIT right now
-tvect = np.linspace(0,10,10)
-simpleNet = HopfNet()
-
-for tt in tvect:
-    if tt < 5:
-        tmu = -1
-    elif tt >= 5:
-        tmu = 1
-        
-    simpleNet.plot_flow(mu=tmu)
-    
+        simpleNet.tf_traj()
+##%%
+##Now we're going to stage our dynamical system -> this is MODELING SWITCHING
+##from t=0 to 5 seconds, we'll have mu = -1
+##then we switch to mu = 1
+#
+##This is SHIT right now
+#tvect = np.linspace(0,10,10)
+#simpleNet = HopfNet()
+#
+#for tt in tvect:
+#    if tt < 5:
+#        tmu = -1
+#    elif tt >= 5:
+#        tmu = 1
+#        
+#    simpleNet.plot_flow(mu=tmu)
+#    
 plt.show()

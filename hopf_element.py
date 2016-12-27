@@ -11,7 +11,7 @@ import numpy as np
 import scipy.signal as sig
 import matplotlib.pyplot as plt
 import pdb
-
+import time
 
 from scipy.integrate import odeint
 
@@ -37,21 +37,27 @@ class HopfNet():
     params = np.array([])
     flow = []
     mu = 1.0
-    current_state = [3.0,4.0]
+    current_state = [1.5,0.0]
     fc = 0
     traj = {}
+    rad = 0
     
-    def __init__(self,center_freq=5):
+    def __init__(self,center_freq=5,radius=1.5):
         self.params = np.array([0,0,0,0,0])
         self.fc = center_freq
+        self.rad = radius
+        #mu now needs to be a function of the desired/input radius
+        self.mu = radius
     
-    def plot_flow(self,mu=1.0):
-        xd = np.linspace(-5.0,5.0,100)
-        yd = np.linspace(-5.0,5.0,100)
+    def plot_flow(self):
+        
+        mesh_lim = 5
+        xd = np.linspace(-mesh_lim,mesh_lim,50)
+        yd = np.linspace(-mesh_lim,mesh_lim,50)
         X,Y = np.meshgrid(xd,yd)
         
         XX = np.array([X.ravel(),Y.ravel()])
-        self.mu = mu
+        mu = self.mu
         
         Z = np.array(self.norm_form(XX,t=0))
         #unit norm the Z vectors
@@ -67,10 +73,16 @@ class HopfNet():
         
         tvect,traj = self.trajectory(state0)
         plt.scatter(traj[:,0],traj[:,1])
+        plt.xlim((-5,5))
+        plt.ylim((-5,5))
+        plt.axis('tight')
+        
         
         plt.subplot(212)
         plt.plot(tvect,traj)
         #plt.show()
+        
+        
         
         #the timeseries of the trajectory
         self.traj = {'X':traj,'T':tvect}
@@ -147,29 +159,40 @@ class HopfNet():
 #t = np.arange(0.0,30.0,0.01)
 #traj = odeint(Hopf,state0,t)
 
-import time
-
-if 1:
-    for mu in [2.0]:
-        simpleNet = HopfNet(center_freq=140)
-        simpleNet.plot_flow(mu=mu)
-        #traj = simpleNet.trajectory([12.0,13.0])
-        simpleNet.tf_traj()
-##%%
-##Now we're going to stage our dynamical system -> this is MODELING SWITCHING
-##from t=0 to 5 seconds, we'll have mu = -1
-##then we switch to mu = 1
-#
-##This is SHIT right now
-#tvect = np.linspace(0,10,10)
-#simpleNet = HopfNet()
-#
-#for tt in tvect:
-#    if tt < 5:
-#        tmu = -1
-#    elif tt >= 5:
-#        tmu = 1
-#        
-#    simpleNet.plot_flow(mu=tmu)
-#    
-plt.show()
+def main():
+    
+    if 1:
+        for mu in [2.0]:
+            simpleNet = HopfNet(center_freq=140,radius=10)
+            
+            simpleNet.plot_flow()
+            #traj = simpleNet.trajectory([12.0,13.0])
+            simpleNet.tf_traj()
+    ##%%
+    #How do we actually change the "radius" of our limit cycle?
+    #This could/will correspond to the overall binarization/discrimination of the system
+    #center freq is DIFFERENT -> gives us an idea of how to go around in time; adjustst the flow field amplitudes, but once the limit cycle reached, it just is
+    #R is different -> gives us a 2dimensional system
+    #Where one is the limit cycle r; the other is the \dot{theta}
+    
+    
+    
+    ##Now we're going to stage our dynamical system -> this is MODELING SWITCHING
+    ##from t=0 to 5 seconds, we'll have mu = -1
+    ##then we switch to mu = 1
+    #
+    ##This is SHIT right now
+    #tvect = np.linspace(0,10,10)
+    #simpleNet = HopfNet()
+    #
+    #for tt in tvect:
+    #    if tt < 5:
+    #        tmu = -1
+    #    elif tt >= 5:
+    #        tmu = 1
+    #        
+    #    simpleNet.plot_flow(mu=tmu)
+    #    
+    plt.show()
+    
+main()

@@ -41,6 +41,7 @@ class HopfNet():
     fc = 0
     traj = {}
     rad = 0
+    ctim = 0
     
     def __init__(self,center_freq=5,radius=1.5):
         self.params = np.array([0,0,0,0,0])
@@ -49,7 +50,7 @@ class HopfNet():
         #mu now needs to be a function of the desired/input radius
         self.mu = radius
     
-    def plot_flow(self):
+    def plot_flow(self,plot_traj=False):
         
         mesh_lim = 5
         xd = np.linspace(-mesh_lim,mesh_lim,50)
@@ -69,10 +70,13 @@ class HopfNet():
         plt.quiver(X,Y,Z_n[0,:],Z_n[1,:])
         
         #overlay a trajectory
-        state0 = self.current_state
-        
-        tvect,traj = self.trajectory(state0)
-        plt.scatter(traj[:,0],traj[:,1])
+        if plot_traj:
+            state0 = self.current_state
+            
+            tvect,traj = self.trajectory(state0)
+            plt.scatter(traj[:,0],traj[:,1])
+            self.traj = {'X':traj,'T':tvect}
+            
         plt.xlim((-5,5))
         plt.ylim((-5,5))
         plt.axis('tight')
@@ -82,15 +86,17 @@ class HopfNet():
         plt.plot(tvect,traj)
         #plt.show()
         
-        
-        
         #the timeseries of the trajectory
-        self.traj = {'X':traj,'T':tvect}
+        
         #the trajectory just ran, so let's just set the last state as the current state
         #self.current_state = traj[-1,:]
         
+        #I don't think I want this since it makes more sense for a "stateless syste" and the "last system" is just a snapshot
+        #We want this to be a stateful system, with the ability to quickly look at the dynamics on demand
         self.flow = Z
     
+    def step_time(self):
+        
     def tf_traj(self):
         #do TF analyses on trajectory
         tvect = self.traj['T']

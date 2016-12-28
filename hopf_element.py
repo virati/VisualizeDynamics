@@ -69,6 +69,9 @@ class HopfNet():
         plt.subplot(211)
         plt.quiver(X,Y,Z_n[0,:],Z_n[1,:])
         
+        plt.xlim((-5,5))
+        plt.ylim((-5,5))
+        plt.axis('tight')
         #overlay a trajectory
         if plot_traj:
             state0 = self.current_state
@@ -77,13 +80,8 @@ class HopfNet():
             plt.scatter(traj[:,0],traj[:,1])
             self.traj = {'X':traj,'T':tvect}
             
-        plt.xlim((-5,5))
-        plt.ylim((-5,5))
-        plt.axis('tight')
-        
-        
-        plt.subplot(212)
-        plt.plot(tvect,traj)
+            plt.subplot(212)
+            plt.plot(tvect,traj)
         #plt.show()
         
         #the timeseries of the trajectory
@@ -96,6 +94,7 @@ class HopfNet():
         self.flow = Z
     
     def step_time(self):
+        pass
         
     def tf_traj(self):
         #do TF analyses on trajectory
@@ -173,7 +172,9 @@ def main():
             
             simpleNet.plot_flow()
             #traj = simpleNet.trajectory([12.0,13.0])
-            simpleNet.tf_traj()
+            #simpleNet.tf_traj()
+            
+            
     ##%%
     #How do we actually change the "radius" of our limit cycle?
     #This could/will correspond to the overall binarization/discrimination of the system

@@ -18,8 +18,14 @@ import matplotlib.cm as cm
 from mpl_toolkits.mplot3d import Axes3D
 
 global ax
-fig, ax = plt.subplots()
-plt.subplots_adjust(left=0.25, bottom=0.25)
+#fig, ax = plt.subplots()
+fig = plt.figure()
+tser = plt.axes([0.05, 0.25, 0.90, 0.20], axisbg='white')
+ax = plt.axes([0.05, 0.50, 0.45, 0.45], axisbg='white')
+#plt.subplots_adjust(left=0.25, bottom=0.25)
+
+
+
 t = np.arange(0.0, 1.0, 0.001)
 a0 = 0
 f0 = 3
@@ -27,6 +33,10 @@ w0 = 0.5
 #s = a0*np.sin(2*np.pi*f0*t)
 #fieldax = plt.subplot(2,2,1)
 
+global systype
+systype = 'Hopf'
+
+#These are the starting state points
 global cx, cy
 cx = 4
 cy = -2
@@ -45,9 +55,6 @@ def H_norm_form(state,t,mu,fc,win=0.5):
     outv = fc * np.array([xd,yd])
     return outv
 
-def norm_form(state,t,mu,fc,win):
-    return H_norm_form(state,t,mu,fc,win)
-    
 def VDP_norm_form(state,t,mu,fc):
     x = state[0]
     y = state[1]
@@ -60,6 +67,14 @@ def VDP_norm_form(state,t,mu,fc):
     outv = fc * np.array([xd,yd])
     return outv
 
+def norm_form(state,t,mu,fc,win):
+    global systype
+    if systype == 'Hopf':
+        dofunc = H_norm_form
+    elif systype == 'VDP':
+        dofunc = VDP_norm_form
+        
+    return dofunc(state,t,mu,fc,win)
     
 def plot_traj(state0,mu=1,fc=1,win=0.5):
     #t = np.arange(0.0,30.0,0.01)
@@ -90,7 +105,7 @@ t,traj = plot_traj([cx,cy],mu=mu,fc=cfreq,win=w)
 #plt.ion()
 #
 
-l = plt.quiver(X,Y,Z_n[0,:],Z_n[1,:],width=0.01)
+l = plt.quiver(X,Y,Z_n[0,:],Z_n[1,:],width=0.01,alpha=0.4)
 
 global scat, start_loc
 #plt.subplot(2,2,1)
@@ -134,6 +149,10 @@ def update(val):
     t,traj = plot_traj([cx,cy],mu=mu, fc=cfreq, win=win)
     
     l.set_UVC(Z_n[0,:],Z_n[1,:])
+
+    z = np.linspace(0.0,30.0,500)
+    traj_cmap = cm.rainbow(z/30)
+    #l.set_color(traj_cmap[:,z.index(cfreq)])
     
     scat.remove()
     z = np.linspace(0,traj.shape[0],traj.shape[0])
@@ -141,6 +160,10 @@ def update(val):
     start_loc.remove()
     start_loc = ax.scatter(cx,cy,color='r',marker='>',s=300)
     #p.scatter(traj[:,0],traj[:,1])
+    
+    curax = plt.axes(tser)
+    curax.cla()
+    plt.plot(t,traj)
     
     plt.title('Start: ' + str(cx) + ',' + str(cy))
     plt.draw()
@@ -167,6 +190,10 @@ def get_coord(event):
         scat.remove()
         z = np.linspace(0,traj.shape[0],traj.shape[0])
         scat = ax.scatter(traj[:,0],traj[:,1],color=traj_cmap,alpha=0.8)
+        
+        curax = plt.axes(tser)
+        curax.cla()
+        plt.plot(t,traj)
         
         start_loc.remove()
         start_loc = ax.scatter(cx,cy,color='r',marker='>',s=300)

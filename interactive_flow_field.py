@@ -11,6 +11,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.widgets import Slider, Button, RadioButtons
 from sklearn import preprocessing as pproc
+from scipy.integrate import odeint
 
 fig, ax = plt.subplots()
 plt.subplots_adjust(left=0.25, bottom=0.25)
@@ -19,7 +20,7 @@ a0 = 0
 f0 = 3
 s = a0*np.sin(2*np.pi*f0*t)
 
-def norm_form(state,mu,fc):
+def norm_form(state,t,mu,fc):
     x = state[0]
     y = state[1]
     
@@ -32,6 +33,13 @@ def norm_form(state,mu,fc):
     
     outv = fc * np.array([xd,yd])
     return outv
+    
+def plot_traj(state0,mu=1,fc=1):
+    t = np.arange(0.0,30.0,0.01)
+    
+    traj = odeint(norm_form,state0,t,args=(mu,fc))
+    
+    return t,traj
 
 mesh_lim = 5
 xd = np.linspace(-mesh_lim,mesh_lim,50)
@@ -39,14 +47,19 @@ yd = np.linspace(-mesh_lim,mesh_lim,50)
 X,Y = np.meshgrid(xd,yd)
 XX = np.array([X.ravel(),Y.ravel()])
 mu = -1
-Z = np.array(norm_form(XX,mu=mu,fc=10))
+Z = np.array(norm_form(XX,[],mu=mu,fc=10))
 Z_n = pproc.normalize(Z.T,norm='l2').T
+            
                      
+t,traj = plot_traj([-5,-5])
 #for 1d data
 #l, = plt.plot(t, s, lw=2, color='red')
 
+plt.ion()
 #
 l = plt.quiver(X,Y,Z_n[0,:],Z_n[1,:])
+p = plt.scatter(traj[:,0],traj[:,1])
+
 
 plt.axis([-5, 5, -5, 5])
 
@@ -57,6 +70,7 @@ axamp = plt.axes([0.25, 0.15, 0.65, 0.03], axisbg=axcolor)
 sfreq = Slider(axfreq, 'CFreq', 0, 30.0, valinit=f0)
 samp = Slider(axamp, 'Mu', -10, 10.0, valinit=a0)
 
+plt.draw()
 
 def update(val):
     mu = samp.val
@@ -64,11 +78,17 @@ def update(val):
     #this is where the update happens!
     #l.set_ydata(amp*np.sin(2*np.pi*freq*t))
     
-    Z = np.array(norm_form(XX,mu=mu,fc=cfreq))
+    Z = np.array(norm_form(XX,[],mu=mu,fc=cfreq))
     Z_n = pproc.normalize(Z.T,norm='l2').T
-                         
-    l.set_UVC(Z_n[0,:],Z_n[1,:])
+                
+    t,traj = plot_traj([5,5])
         
+    l.set_UVC(Z_n[0,:],Z_n[1,:])
+    p = ax.scatter(traj[:,0],traj[:,1])
+    #p.scatter(traj[:,0],traj[:,1])
+    
+    plt.draw()
+    
     fig.canvas.draw_idle()
     
 sfreq.on_changed(update)

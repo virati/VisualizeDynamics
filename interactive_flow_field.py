@@ -37,7 +37,7 @@ w0 = 0.5
 #fieldax = plt.subplot(2,2,1)
 
 global systype
-systype = 'Hopf'
+systype = 'SN'
 
 #These are the starting state points
 global cx, cy
@@ -71,13 +71,26 @@ def H_norm_form(state,t,mu,fc,win=0.5):
     outv = fc * np.array([xd,yd])
     return outv
 
-def VDP_norm_form(state,t,mu,fc):
+def SN_norm_form(state,t,mu,fc,win):
     x = state[0]
     y = state[1]
     
     #these two can shape peakiness, be used for PAC?
 
-    xd = 2 * mu * x - y**2 * x - y
+    xd = mu - x**2
+    yd = -y
+    
+    outv = fc * np.array([xd,yd])
+    return outv
+
+    
+def VDP_norm_form(state,t,mu,fc,win):
+    x = state[0]
+    y = state[1]
+    
+    #these two can shape peakiness, be used for PAC?
+
+    xd = win * mu * x - y**2 * x - y
     yd = x
     
     outv = fc * np.array([xd,yd])
@@ -89,6 +102,8 @@ def norm_form(state,t,mu,fc,win):
         dofunc = H_norm_form
     elif systype == 'VDP':
         dofunc = VDP_norm_form
+    elif systype == 'SN':
+        dofunc = SN_norm_form
         
     return dofunc(state,t,mu,fc,win)
     
@@ -140,8 +155,10 @@ plt.axis([-5, 5, -5, 5])
 caxis = plt.axes(phslice)
 Zmag = np.linalg.norm(Z,axis=0).reshape(X.T.shape)[25,:]
 crits,stabs = crit_points(xd,Zmag)
+
 plt.plot(xd,Zmag,color='r')
-plt.plot(xd[crits],Zmag[crits],'o',color='red')
+#plt.plot(xd[crits],Zmag[crits],'o',color='red')
+plt.scatter(xd[crits],Zmag[crits],color='red')
 
 #Do timeseries plotting
 caxis = plt.axes(tser)

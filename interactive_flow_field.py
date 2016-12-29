@@ -25,8 +25,8 @@ s = a0*np.sin(2*np.pi*f0*t)
 #fieldax = plt.subplot(2,2,1)
 
 global cx, cy
-cx = 5
-cy = -5
+cx = 4
+cy = -2
 
 def norm_form(state,t,mu,fc):
     x = state[0]
@@ -62,23 +62,23 @@ Z = np.array(norm_form(XX,[],mu=mu,fc=10))
 Z_n = pproc.normalize(Z.T,norm='l2').T
             
                      
-t,traj = plot_traj([-5,-5])
+t,traj = plot_traj([cx,cy])
 #for 1d data
 #l, = plt.plot(t, s, lw=2, color='red')
 
-plt.ion()
+#plt.ion()
 #
 
 l = plt.quiver(X,Y,Z_n[0,:],Z_n[1,:])
 
-global scat
+global scat, start_loc
 #plt.subplot(2,2,1)
 #z = np.linspace(0,1,t.shape[0])
 z = np.linspace(0.0,30.0,3000)
 traj_cmap = cm.rainbow(z)
 
 scat = ax.scatter(traj[:,0],traj[:,1],color=traj_cmap)
-start_state = ax.scatter(cx,cy,color='r',s=20)
+start_loc = ax.scatter(cx,cy,color='r',marker='>',s=300)
 
 plt.axis([-5, 5, -5, 5])
 
@@ -92,7 +92,7 @@ samp = Slider(axamp, 'Mu', -10, 10.0, valinit=a0)
 plt.draw()
 
 def update(val):
-    global scat
+    global scat, start_loc
     mu = samp.val
     cfreq = sfreq.val
     #this is where the update happens!
@@ -111,6 +111,8 @@ def update(val):
     scat.remove()
     z = np.linspace(0,traj.shape[0],traj.shape[0])
     scat = ax.scatter(traj[:,0],traj[:,1],color=traj_cmap)
+    start_loc.remove()
+    start_loc = ax.scatter(cx,cy,color='r',marker='>',s=300)
     #p.scatter(traj[:,0],traj[:,1])
     
     plt.title('Start: ' + str(cx) + ',' + str(cy))
@@ -129,9 +131,18 @@ def get_coord(event):
     print(event.inaxes)
     #global ax
     if event.inaxes == ax:
-        global cx,cy
+        global cx,cy,start_loc,scat
         cx,cy = event.xdata, event.ydata
-
+        mu = samp.val
+        cfreq = sfreq.val
+        
+        t,traj = plot_traj([cx,cy],mu=mu, fc=cfreq)
+        scat.remove()
+        z = np.linspace(0,traj.shape[0],traj.shape[0])
+        scat = ax.scatter(traj[:,0],traj[:,1],color=traj_cmap)
+        start_loc.remove()
+        start_loc = ax.scatter(cx,cy,color='r',marker='>',s=300)
+        
 cid = fig.canvas.mpl_connect('button_press_event',get_coord)
 #cid = fig.canvas.mpl_connect('pick_event',get_coord)
 

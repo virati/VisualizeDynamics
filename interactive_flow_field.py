@@ -12,6 +12,7 @@ import matplotlib.pyplot as plt
 from matplotlib.widgets import Slider, Button, RadioButtons
 from sklearn import preprocessing as pproc
 from scipy.integrate import odeint
+import pdb
 
 fig, ax = plt.subplots()
 plt.subplots_adjust(left=0.25, bottom=0.25)
@@ -57,8 +58,11 @@ t,traj = plot_traj([-5,-5])
 
 plt.ion()
 #
+
 l = plt.quiver(X,Y,Z_n[0,:],Z_n[1,:])
-p = plt.scatter(traj[:,0],traj[:,1])
+
+global scat
+scat = ax.scatter(traj[:,0],traj[:,1])
 
 
 plt.axis([-5, 5, -5, 5])
@@ -73,18 +77,25 @@ samp = Slider(axamp, 'Mu', -10, 10.0, valinit=a0)
 plt.draw()
 
 def update(val):
+    global scat
     mu = samp.val
     cfreq = sfreq.val
     #this is where the update happens!
     #l.set_ydata(amp*np.sin(2*np.pi*freq*t))
     
+    #ps.remove()
+    plt.draw()
+    
     Z = np.array(norm_form(XX,[],mu=mu,fc=cfreq))
     Z_n = pproc.normalize(Z.T,norm='l2').T
                 
-    t,traj = plot_traj([5,5])
-        
+    t,traj = plot_traj([5,5],mu=mu, fc=cfreq)
+    
+    
     l.set_UVC(Z_n[0,:],Z_n[1,:])
-    p = ax.scatter(traj[:,0],traj[:,1])
+    
+    scat.remove()
+    scat = ax.scatter(traj[:,0],traj[:,1])
     #p.scatter(traj[:,0],traj[:,1])
     
     plt.draw()

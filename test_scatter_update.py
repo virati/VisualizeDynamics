@@ -17,17 +17,19 @@ y = np.random.normal(loc=2,size=(500,1))
 plt.figure()
 ps = plt.scatter(x,y)
 plt.draw()
+
 plt.pause(1)
 
 x = np.random.normal(loc=10,size=(500,1))
 y = np.random.normal(loc=-2,size=(500,1))
+ps.remove()
 ps.set_array(np.hstack((x,y)))
 plt.draw()
 
 #%%
 
 
-plt.clf()
+#plt.clf()
 plt.scatter(x,y)
 plt.draw()
 

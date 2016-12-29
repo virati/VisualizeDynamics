@@ -23,19 +23,20 @@ plt.subplots_adjust(left=0.25, bottom=0.25)
 t = np.arange(0.0, 1.0, 0.001)
 a0 = 0
 f0 = 3
-s = a0*np.sin(2*np.pi*f0*t)
+w0 = 0.5
+#s = a0*np.sin(2*np.pi*f0*t)
 #fieldax = plt.subplot(2,2,1)
 
 global cx, cy
 cx = 4
 cy = -2
 
-def H_norm_form(state,t,mu,fc):
+def H_norm_form(state,t,mu,fc,win=0.5):
     x = state[0]
     y = state[1]
     
     #these two can shape peakiness, be used for PAC?
-    w = 0.5
+    w = win
     q = 1-w
 
     xd = w * (mu * x - y - x * (x**2 + y**2))
@@ -44,8 +45,8 @@ def H_norm_form(state,t,mu,fc):
     outv = fc * np.array([xd,yd])
     return outv
 
-def norm_form(state,t,mu,fc):
-    return VDP_norm_form(state,t,mu,fc)
+def norm_form(state,t,mu,fc,win):
+    return H_norm_form(state,t,mu,fc,win)
     
 def VDP_norm_form(state,t,mu,fc):
     x = state[0]
@@ -60,13 +61,13 @@ def VDP_norm_form(state,t,mu,fc):
     return outv
 
     
-def plot_traj(state0,mu=1,fc=1):
+def plot_traj(state0,mu=1,fc=1,win=0.5):
     #t = np.arange(0.0,30.0,0.01)
     t = np.linspace(0.0,10.0,500)
     global cx, cy
     state0 = [cx, cy]
     
-    traj = odeint(norm_form,state0,t,args=(mu,fc))
+    traj = odeint(norm_form,state0,t,args=(mu,fc,win))
     
     return t,traj
 
@@ -77,18 +78,19 @@ X,Y = np.meshgrid(xd,yd)
 XX = np.array([X.ravel(),Y.ravel()])
 mu = a0
 cfreq = f0
-Z = np.array(norm_form(XX,[],mu=mu,fc=cfreq))
+w = w0
+Z = np.array(norm_form(XX,[],mu=mu,fc=cfreq,win=w))
 Z_n = pproc.normalize(Z.T,norm='l2').T
             
                      
-t,traj = plot_traj([cx,cy],mu=mu,fc=cfreq)
+t,traj = plot_traj([cx,cy],mu=mu,fc=cfreq,win=w)
 #for 1d data
 #l, = plt.plot(t, s, lw=2, color='red')
 
 #plt.ion()
 #
 
-l = plt.quiver(X,Y,Z_n[0,:],Z_n[1,:])
+l = plt.quiver(X,Y,Z_n[0,:],Z_n[1,:],width=0.01)
 
 global scat, start_loc
 #plt.subplot(2,2,1)
@@ -97,6 +99,8 @@ z = np.linspace(0.0,30.0,500)
 traj_cmap = cm.rainbow(z/30)
 
 scat = ax.scatter(traj[:,0],traj[:,1],color=traj_cmap,alpha=0.8,s=20)
+#Try to do a continuous trajectory, with colors
+#scat = ax.plot(traj[:,0],traj[:,1],alpha=0.8,color=traj_cmap)
 start_loc = ax.scatter(cx,cy,color='r',marker='>',s=300)
 
 plt.axis([-5, 5, -5, 5])
@@ -104,9 +108,11 @@ plt.axis([-5, 5, -5, 5])
 axcolor = 'lightgoldenrodyellow'
 axfreq = plt.axes([0.25, 0.1, 0.65, 0.03], axisbg=axcolor)
 axamp = plt.axes([0.25, 0.15, 0.65, 0.03], axisbg=axcolor)
+axw = plt.axes([0.25, 0.05, 0.65, 0.03], axisbg=axcolor)
 
-sfreq = Slider(axfreq, 'CFreq', 0, 30.0, valinit=f0)
+sfreq = Slider(axfreq, 'CFreq', 0, 15.0, valinit=f0)
 samp = Slider(axamp, 'Mu', -10, 10.0, valinit=a0)
+sw = Slider(axw,'W factor',-0,1.0,valinit=w0)
 
 plt.draw()
 
@@ -114,16 +120,18 @@ def update(val):
     global scat, start_loc
     mu = samp.val
     cfreq = sfreq.val
+    win = sw.val
+    
     #this is where the update happens!
     #l.set_ydata(amp*np.sin(2*np.pi*freq*t))
     global cx, cy
     #ps.remove()
     plt.draw()
     
-    Z = np.array(norm_form(XX,[],mu=mu,fc=cfreq))
+    Z = np.array(norm_form(XX,[],mu=mu,fc=cfreq,win=win))
     Z_n = pproc.normalize(Z.T,norm='l2').T
                 
-    t,traj = plot_traj([cx,cy],mu=mu, fc=cfreq)
+    t,traj = plot_traj([cx,cy],mu=mu, fc=cfreq, win=win)
     
     l.set_UVC(Z_n[0,:],Z_n[1,:])
     
@@ -141,6 +149,7 @@ def update(val):
 
 sfreq.on_changed(update)
 samp.on_changed(update)
+sw.on_changed(update)
 
 resetax = plt.axes([-5,5,-5,5])
 button = Button(resetax, 'Reset', color=axcolor, hovercolor='0.975')

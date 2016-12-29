@@ -15,6 +15,8 @@ from scipy.integrate import odeint
 import pdb
 import matplotlib.cm as cm
 
+from mpl_toolkits.mplot3d import Axes3D
+
 global ax
 fig, ax = plt.subplots()
 plt.subplots_adjust(left=0.25, bottom=0.25)
@@ -28,7 +30,7 @@ global cx, cy
 cx = 4
 cy = -2
 
-def norm_form(state,t,mu,fc):
+def H_norm_form(state,t,mu,fc):
     x = state[0]
     y = state[1]
     
@@ -41,10 +43,26 @@ def norm_form(state,t,mu,fc):
     
     outv = fc * np.array([xd,yd])
     return outv
+
+def norm_form(state,t,mu,fc):
+    return VDP_norm_form(state,t,mu,fc)
+    
+def VDP_norm_form(state,t,mu,fc):
+    x = state[0]
+    y = state[1]
+    
+    #these two can shape peakiness, be used for PAC?
+
+    xd = 2 * mu * x - y**2 * x - y
+    yd = x
+    
+    outv = fc * np.array([xd,yd])
+    return outv
+
     
 def plot_traj(state0,mu=1,fc=1):
     #t = np.arange(0.0,30.0,0.01)
-    t = np.linspace(0.0,30.0,3000)
+    t = np.linspace(0.0,10.0,500)
     global cx, cy
     state0 = [cx, cy]
     
@@ -57,12 +75,13 @@ xd = np.linspace(-mesh_lim,mesh_lim,50)
 yd = np.linspace(-mesh_lim,mesh_lim,50)
 X,Y = np.meshgrid(xd,yd)
 XX = np.array([X.ravel(),Y.ravel()])
-mu = -1
-Z = np.array(norm_form(XX,[],mu=mu,fc=10))
+mu = a0
+cfreq = f0
+Z = np.array(norm_form(XX,[],mu=mu,fc=cfreq))
 Z_n = pproc.normalize(Z.T,norm='l2').T
             
                      
-t,traj = plot_traj([cx,cy])
+t,traj = plot_traj([cx,cy],mu=mu,fc=cfreq)
 #for 1d data
 #l, = plt.plot(t, s, lw=2, color='red')
 
@@ -74,10 +93,10 @@ l = plt.quiver(X,Y,Z_n[0,:],Z_n[1,:])
 global scat, start_loc
 #plt.subplot(2,2,1)
 #z = np.linspace(0,1,t.shape[0])
-z = np.linspace(0.0,30.0,3000)
-traj_cmap = cm.rainbow(z)
+z = np.linspace(0.0,30.0,500)
+traj_cmap = cm.rainbow(z/30)
 
-scat = ax.scatter(traj[:,0],traj[:,1],color=traj_cmap)
+scat = ax.scatter(traj[:,0],traj[:,1],color=traj_cmap,alpha=0.8,s=20)
 start_loc = ax.scatter(cx,cy,color='r',marker='>',s=300)
 
 plt.axis([-5, 5, -5, 5])
@@ -128,7 +147,6 @@ button = Button(resetax, 'Reset', color=axcolor, hovercolor='0.975')
 
 def get_coord(event):
     #print(str(event.xdata) + ' ' + str(event.ydata))
-    print(event.inaxes)
     #global ax
     if event.inaxes == ax:
         global cx,cy,start_loc,scat
@@ -139,7 +157,8 @@ def get_coord(event):
         t,traj = plot_traj([cx,cy],mu=mu, fc=cfreq)
         scat.remove()
         z = np.linspace(0,traj.shape[0],traj.shape[0])
-        scat = ax.scatter(traj[:,0],traj[:,1],color=traj_cmap)
+        scat = ax.scatter(traj[:,0],traj[:,1],color=traj_cmap,alpha=0.8)
+        
         start_loc.remove()
         start_loc = ax.scatter(cx,cy,color='r',marker='>',s=300)
         

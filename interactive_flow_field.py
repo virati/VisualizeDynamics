@@ -13,7 +13,9 @@ from matplotlib.widgets import Slider, Button, RadioButtons
 from sklearn import preprocessing as pproc
 from scipy.integrate import odeint
 import pdb
+import matplotlib.cm as cm
 
+global ax
 fig, ax = plt.subplots()
 plt.subplots_adjust(left=0.25, bottom=0.25)
 t = np.arange(0.0, 1.0, 0.001)
@@ -21,6 +23,10 @@ a0 = 0
 f0 = 3
 s = a0*np.sin(2*np.pi*f0*t)
 #fieldax = plt.subplot(2,2,1)
+
+global cx, cy
+cx = 5
+cy = -5
 
 def norm_form(state,t,mu,fc):
     x = state[0]
@@ -37,7 +43,10 @@ def norm_form(state,t,mu,fc):
     return outv
     
 def plot_traj(state0,mu=1,fc=1):
-    t = np.arange(0.0,30.0,0.01)
+    #t = np.arange(0.0,30.0,0.01)
+    t = np.linspace(0.0,30.0,3000)
+    global cx, cy
+    state0 = [cx, cy]
     
     traj = odeint(norm_form,state0,t,args=(mu,fc))
     
@@ -64,8 +73,12 @@ l = plt.quiver(X,Y,Z_n[0,:],Z_n[1,:])
 
 global scat
 #plt.subplot(2,2,1)
-scat = ax.scatter(traj[:,0],traj[:,1])
+#z = np.linspace(0,1,t.shape[0])
+z = np.linspace(0.0,30.0,3000)
+traj_cmap = cm.rainbow(z)
 
+scat = ax.scatter(traj[:,0],traj[:,1],color=traj_cmap)
+start_state = ax.scatter(cx,cy,color='r',s=20)
 
 plt.axis([-5, 5, -5, 5])
 
@@ -84,21 +97,23 @@ def update(val):
     cfreq = sfreq.val
     #this is where the update happens!
     #l.set_ydata(amp*np.sin(2*np.pi*freq*t))
-    
+    global cx, cy
     #ps.remove()
     plt.draw()
     
     Z = np.array(norm_form(XX,[],mu=mu,fc=cfreq))
     Z_n = pproc.normalize(Z.T,norm='l2').T
                 
-    t,traj = plot_traj([5,5],mu=mu, fc=cfreq)
+    t,traj = plot_traj([cx,cy],mu=mu, fc=cfreq)
     
     l.set_UVC(Z_n[0,:],Z_n[1,:])
     
     scat.remove()
-    scat = ax.scatter(traj[:,0],traj[:,1])
+    z = np.linspace(0,traj.shape[0],traj.shape[0])
+    scat = ax.scatter(traj[:,0],traj[:,1],color=traj_cmap)
     #p.scatter(traj[:,0],traj[:,1])
     
+    plt.title('Start: ' + str(cx) + ',' + str(cy))
     plt.draw()
     
     fig.canvas.draw_idle()
@@ -109,6 +124,16 @@ samp.on_changed(update)
 resetax = plt.axes([-5,5,-5,5])
 button = Button(resetax, 'Reset', color=axcolor, hovercolor='0.975')
 
+def get_coord(event):
+    #print(str(event.xdata) + ' ' + str(event.ydata))
+    print(event.inaxes)
+    #global ax
+    if event.inaxes == ax:
+        global cx,cy
+        cx,cy = event.xdata, event.ydata
+
+cid = fig.canvas.mpl_connect('button_press_event',get_coord)
+#cid = fig.canvas.mpl_connect('pick_event',get_coord)
 
 def reset(event):
     sfreq.reset()

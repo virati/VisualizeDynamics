@@ -20,6 +20,7 @@ t = np.arange(0.0, 1.0, 0.001)
 a0 = 0
 f0 = 3
 s = a0*np.sin(2*np.pi*f0*t)
+#fieldax = plt.subplot(2,2,1)
 
 def norm_form(state,t,mu,fc):
     x = state[0]
@@ -62,6 +63,7 @@ plt.ion()
 l = plt.quiver(X,Y,Z_n[0,:],Z_n[1,:])
 
 global scat
+#plt.subplot(2,2,1)
 scat = ax.scatter(traj[:,0],traj[:,1])
 
 
@@ -91,7 +93,6 @@ def update(val):
                 
     t,traj = plot_traj([5,5],mu=mu, fc=cfreq)
     
-    
     l.set_UVC(Z_n[0,:],Z_n[1,:])
     
     scat.remove()
@@ -101,7 +102,7 @@ def update(val):
     plt.draw()
     
     fig.canvas.draw_idle()
-    
+
 sfreq.on_changed(update)
 samp.on_changed(update)
 
@@ -114,13 +115,13 @@ def reset(event):
     samp.reset()
 button.on_clicked(reset)
 
-rax = plt.axes([0.025, 0.5, 0.15, 0.15], axisbg=axcolor)
-radio = RadioButtons(rax, ('red', 'blue', 'green'), active=0)
+#rax = plt.axes([0.025, 0.5, 0.15, 0.15], axisbg=axcolor)
+#radio = RadioButtons(rax, ('red', 'blue', 'green'), active=0)
 
 
-def colorfunc(label):
-    l.set_color(label)
-    fig.canvas.draw_idle()
-radio.on_clicked(colorfunc)
+#def colorfunc(label):
+#    l.set_color(label)
+#    fig.canvas.draw_idle()
+#radio.on_clicked(colorfunc)
 
 plt.show()

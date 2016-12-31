@@ -22,7 +22,7 @@ global ax
 #fig, ax = plt.subplots()
 fig = plt.figure()
 tser = plt.axes([0.05, 0.25, 0.90, 0.20], axisbg='white')
-phslice = plt.axes([0.5, 0.50, 0.45, 0.45], axisbg='white')
+phslice = plt.axes([0.5, 0.50, 0.45, 0.45], axisbg='white',projection='3d')
 
 ax = plt.axes([0.05, 0.50, 0.45, 0.45], axisbg='white')
 #plt.subplots_adjust(left=0.25, bottom=0.25)
@@ -37,7 +37,7 @@ w0 = 0.5
 #fieldax = plt.subplot(2,2,1)
 
 global systype
-systype = 'SN'
+systype = 'Hopf'
 
 #These are the starting state points
 global cx, cy
@@ -100,7 +100,7 @@ def norm_form(state,t,mu,fc,win):
     global systype
     if systype == 'Hopf':
         dofunc = H_norm_form
-    elif systype == 'VDP':
+    elif systype == 'VDPol':
         dofunc = VDP_norm_form
     elif systype == 'SN':
         dofunc = SN_norm_form
@@ -117,7 +117,7 @@ def plot_traj(state0,mu=1,fc=1,win=0.5):
     
     return t,traj
 
-mesh_lim = 5
+mesh_lim = 3
 xd = np.linspace(-mesh_lim,mesh_lim,50)
 yd = np.linspace(-mesh_lim,mesh_lim,50)
 X,Y = np.meshgrid(xd,yd)
@@ -149,16 +149,24 @@ scat = ax.scatter(traj[:,0],traj[:,1],color=traj_cmap,alpha=0.8,s=20)
 #scat = ax.plot(traj[:,0],traj[:,1],alpha=0.8,color=traj_cmap)
 start_loc = ax.scatter(cx,cy,color='r',marker='>',s=300)
 #set the axes
-plt.axis([-5, 5, -5, 5])
+plt.axis([-mesh_lim, mesh_lim, -mesh_lim, mesh_lim])
 
 
+#Plot a slice of phase
 caxis = plt.axes(phslice)
-Zmag = np.linalg.norm(Z,axis=0).reshape(X.T.shape)[25,:]
-crits,stabs = crit_points(xd,Zmag)
 
-plt.plot(xd,Zmag,color='r')
-#plt.plot(xd[crits],Zmag[crits],'o',color='red')
-plt.scatter(xd[crits],Zmag[crits],color='red')
+Zmag = np.linalg.norm(Z,axis=0).reshape((X.T.shape[0],Y.T.shape[0])) #.reshape(X.T.shape)[slic,:]
+Zslice = np.linalg.norm(Z,axis=0).reshape(X.T.shape)[25,:]
+crits,stabs = crit_points(xd,Zslice)
+
+caxis.plot_surface(X,Y,Zmag,alpha=0.2)
+#caxis.plot(yd,Zslice,color='r')
+cset = caxis.contourf(X,Y,Zmag,zdir='z',offset=-10,cmap=cm.winter)
+cset = caxis.contourf(X,Y,Zmag,zdir='x',offset=-10,cmap=cm.winter)
+cset = caxis.contourf(X,Y,Zmag,zdir='y',offset=-10,cmap=cm.winter)
+plt.plot(xd[crits],Zslice[crits],'o',color='red')
+caxis.set_zlim((0,20))
+#plt.scatter(xd[crits],Zmag[crits],color='red')
 
 #Do timeseries plotting
 caxis = plt.axes(tser)
@@ -174,7 +182,7 @@ axamp = plt.axes([0.25, 0.15, 0.65, 0.03], axisbg=axcolor)
 axw = plt.axes([0.25, 0.05, 0.65, 0.03], axisbg=axcolor)
 
 sfreq = Slider(axfreq, 'CFreq', 0, 15.0, valinit=f0)
-samp = Slider(axamp, 'Mu', -10, 10.0, valinit=a0)
+samp = Slider(axamp, 'Mu', -10, 8, valinit=a0)
 sw = Slider(axw,'W factor',-0,1.0,valinit=w0)
 
 plt.draw()
@@ -213,13 +221,27 @@ def update(val):
     curax.cla()
     plt.plot(t,traj)
     
+    #Plot slice of phase space
     caxis = plt.axes(phslice)
     caxis.cla()
-    #Take the middle slice
-    Zmag = np.linalg.norm(Z,axis=0).reshape(X.T.shape)[25,:]
-    crits,stabs = crit_points(xd,Zmag)
-    caxis.plot(xd,Zmag,color='r')
-    caxis.scatter(xd[crits],Zmag[crits],color='red')
+#    #Take the middle slice
+#    Zmag = np.linalg.norm(Z,axis=0).reshape(X.T.shape)[25,:]
+#    crits,stabs = crit_points(xd,Zmag)
+#    caxis.plot(xd,Zmag,color='r')
+#    caxis.scatter(xd[crits],Zmag[crits],color='red')
+    
+    Zmag = np.linalg.norm(Z,axis=0).reshape((X.T.shape[0],Y.T.shape[0])) #.reshape(X.T.shape)[slic,:]
+    Zslice = np.linalg.norm(Z,axis=0).reshape(X.T.shape)[25,:]
+    crits,stabs = crit_points(xd,Zslice)
+    
+    caxis.plot_surface(X,Y,Zmag,alpha=0.2)
+    #caxis.plot(yd,Zslice,color='r')
+    cset = caxis.contourf(X,Y,Zmag,zdir='z',offset=200,cmap=cm.winter)
+    cset = caxis.contourf(X,Y,Zmag,zdir='x',offset=-10,cmap=cm.winter)
+    cset = caxis.contourf(X,Y,Zmag,zdir='y',offset=-10,cmap=cm.winter)
+    caxis.set_zlim((0,20))
+    caxis.plot(xd[crits],Zslice[crits],'o',color='red')
+    #plt.scatter(xd[crits],Zmag[crits],color='red')
     
     plt.title('Start: ' + str(cx) + ',' + str(cy))
     plt.draw()
@@ -230,7 +252,7 @@ sfreq.on_changed(update)
 samp.on_changed(update)
 sw.on_changed(update)
 
-resetax = plt.axes([-5,5,-5,5])
+resetax = plt.axes([-mesh_lim,mesh_lim,-mesh_lim,mesh_lim])
 button = Button(resetax, 'Reset', color=axcolor, hovercolor='0.975')
 
 def get_coord(event):
@@ -262,13 +284,15 @@ def reset(event):
     samp.reset()
 button.on_clicked(reset)
 
-#rax = plt.axes([0.025, 0.5, 0.15, 0.15], axisbg=axcolor)
-#radio = RadioButtons(rax, ('red', 'blue', 'green'), active=0)
+rax = plt.axes([0.025, 0.5, 0.15, 0.15], axisbg=axcolor)
+radio = RadioButtons(rax, ('Hopf', 'VDPol', 'SN'), active=0)
 
-
-#def colorfunc(label):
-#    l.set_color(label)
-#    fig.canvas.draw_idle()
-#radio.on_clicked(colorfunc)
+def setdynfunc(label):
+    #l.set_color(label)
+    global systype
+    systype = label
+    fig.canvas.draw_idle()
+    
+radio.on_clicked(setdynfunc)
 
 plt.show()

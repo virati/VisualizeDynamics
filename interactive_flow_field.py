@@ -83,6 +83,18 @@ def SN_norm_form(state,t,mu,fc,win):
     outv = fc * np.array([xd,yd])
     return outv
 
+def global_norm_form(state,t,mu,fc,win):
+    x = state[0]
+    y = state[1]
+    
+    #these two can shape peakiness, be used for PAC?
+
+    xd = y
+    yd = mu * y + x - x**2 + x * y
+    
+    outv = fc * np.array([xd,yd])
+    return outv
+
     
 def VDP_norm_form(state,t,mu,fc,win):
     x = state[0]
@@ -104,6 +116,8 @@ def norm_form(state,t,mu,fc,win):
         dofunc = VDP_norm_form
     elif systype == 'SN':
         dofunc = SN_norm_form
+    elif systype == 'global':
+        dofunc = global_norm_form
         
     return dofunc(state,t,mu,fc,win)
     
@@ -285,7 +299,7 @@ def reset(event):
 button.on_clicked(reset)
 
 rax = plt.axes([0.025, 0.5, 0.15, 0.15], axisbg=axcolor)
-radio = RadioButtons(rax, ('Hopf', 'VDPol', 'SN'), active=0)
+radio = RadioButtons(rax, ('Hopf', 'VDPol', 'SN','global'), active=0)
 
 def setdynfunc(label):
     #l.set_color(label)

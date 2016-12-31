@@ -173,17 +173,22 @@ plt.axis([-mesh_lim, mesh_lim, -mesh_lim, mesh_lim])
 
 #Plot a slice of phase
 caxis = plt.axes(phslice)
+x2 = np.linspace(-mesh_lim,mesh_lim,100)
+y2 = np.linspace(-mesh_lim,mesh_lim,100)
+X2,Y2 = np.meshgrid(x2,y2)
+XX2 = np.array([X2.ravel(),Y2.ravel()])
+Zdense = np.array(norm_form(XX2,[],mu=mu,fc=cfreq,win=w))
 
-Zmag = np.linalg.norm(Z,axis=0).reshape((X.T.shape[0],Y.T.shape[0])) #.reshape(X.T.shape)[slic,:]
-Zslice = np.linalg.norm(Z,axis=0).reshape(X.T.shape)[mesh_res/2,:]
+Zmag = np.linalg.norm(Zdense,axis=0).reshape((X2.T.shape[0],Y2.T.shape[0])) #.reshape(X.T.shape)[slic,:]
+#Zslice = np.linalg.norm(Z,axis=0).reshape(X.T.shape)[mesh_res/2,:]
 #crits,stabs = crit_points(xd,Zslice)
-crits,_ = crit_pts_2d(xd,Zmag)
+crits,_ = crit_pts_2d(x2,Zmag)
 
-caxis.plot_surface(X,Y,Zmag,alpha=0.4)
+caxis.plot_surface(X2,Y2,Zmag,alpha=0.2)
 #caxis.plot(yd,Zslice,color='r')
-cset = caxis.contourf(X,Y,Zmag,zdir='z',offset=-10,cmap=cm.winter,alpha=0.2)
-cset = caxis.contourf(X,Y,Zmag,zdir='x',offset=-10,cmap=cm.winter,alpha=0.2)
-cset = caxis.contourf(X,Y,Zmag,zdir='y',offset=-10,cmap=cm.winter,alpha=0.2)
+cset = caxis.contourf(X2,Y2,Zmag,zdir='z',offset=-10,cmap=cm.winter,alpha=0.1)
+cset = caxis.contourf(X2,Y2,Zmag,zdir='x',offset=-10,cmap=cm.winter,alpha=0.1)
+cset = caxis.contourf(X2,Y2,Zmag,zdir='y',offset=-10,cmap=cm.winter,alpha=0.1)
 #plt.plot(xd[crits],Zslice[crits],'o',color='red')
 #caxis.scatter(xd[crits],yd[crits],Zslice[crits],color='red')
 caxis.set_zlim((0,20))
@@ -250,18 +255,22 @@ def update(val):
 #    crits,stabs = crit_points(xd,Zmag)
 #    caxis.plot(xd,Zmag,color='r')
 #    caxis.scatter(xd[crits],Zmag[crits],color='red')
-    
-    Zmag = np.linalg.norm(Z,axis=0).reshape((X.T.shape[0],Y.T.shape[0])) #.reshape(X.T.shape)[slic,:]
-    Zslice = np.linalg.norm(Z,axis=0).reshape(X.T.shape)[mesh_res/2,:]
+    Zdense = np.array(norm_form(XX2,[],mu=mu,fc=cfreq,win=win))
+
+    Zmag = np.linalg.norm(Zdense,axis=0).reshape((X2.T.shape[0],Y2.T.shape[0])) #.reshape(X.T.shape)[slic,:]
+    #Zslice = np.linalg.norm(Z,axis=0).reshape(X.T.shape)[mesh_res/2,:]
     #crits,stabs = crit_points(xd,Zslice)
-    crits,_ = crit_pts_2d(xd,Zmag)
+    crits,_ = crit_pts_2d(x2,Zmag)
     
-    caxis.plot_surface(X,Y,Zmag,alpha=0.4)
+    caxis.plot_surface(X2,Y2,Zmag,alpha=0.2)
     #caxis.plot(yd,Zslice,color='r')
-    cset = caxis.contourf(X,Y,Zmag,zdir='z',offset=200,cmap=cm.winter,alpha=0.2)
-    cset = caxis.contourf(X,Y,Zmag,zdir='x',offset=-10,cmap=cm.winter,alpha=0.2)
-    cset = caxis.contourf(X,Y,Zmag,zdir='y',offset=-10,cmap=cm.winter,alpha=0.2)
+    cset = caxis.contourf(X2,Y2,Zmag,zdir='z',offset=-10,cmap=cm.winter,alpha=0.1)
+    cset = caxis.contourf(X2,Y2,Zmag,zdir='x',offset=-10,cmap=cm.winter,alpha=0.1)
+    cset = caxis.contourf(X2,Y2,Zmag,zdir='y',offset=-10,cmap=cm.winter,alpha=0.1)
+    caxis.set_xlim((-2,2))
+    caxis.set_ylim((-2,2))
     caxis.set_zlim((0,20))
+    
     #caxis.plot(xd[crits],Zslice[crits],'o',color='red')
     #caxis.scatter(X[crits],Y[crits],Zslice[crits],color='red')
     #plt.scatter(xd[crits],Zmag[crits],color='red')

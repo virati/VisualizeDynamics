@@ -1,3 +1,9 @@
-# HopfComputeNet
+# Dynamical Network
 
-This is going to be the repo for the Hopf-Compute-Net, and attempt from me to merge emotion/mood metaphor into computation. I'm thinking this will merge into a Hopfield network where each node, isntead of a logistic, is a hopf system where the input biases the bifurcation constant, timing becomes important through the phase, etc.
+## Overview
+This project is an attempt to build a framework for studying networks of dynamical systems. The goal of this is to merge this with efforts to understand empirical electrophysiologic changes in mood disorders.
+
+## Dynamical System Viewer
+Right now, the most complete portion of this repo is the Dynamical System Viewer. Below is a quick visual overview of what this tool does.
+
+![alt-text](https://github.com/virat/DynamicalNetworks/Imgs/2017-01-02-205147_1920x1080_scrot.png "Frontend")

@@ -6,4 +6,4 @@ This project is an attempt to build a framework for studying networks of dynamic
 ## Dynamical System Viewer
 Right now, the most complete portion of this repo is the Dynamical System Viewer. Below is a quick visual overview of what this tool does.
 
-![alt-text](https://github.com/virat/DynamicalNetworks/Imgs/2017-01-02-205147_1920x1080_scrot.png "Frontend")
+![alt-text](DynamicalNetworks/Imgs/2017-01-02-205147_1920x1080_scrot.png "Frontend")

@@ -160,7 +160,7 @@ ax.axhline(y=0,color='r')
 global scat, start_loc
 #plt.subplot(2,2,1)
 #z = np.linspace(0,1,t.shape[0])
-z = np.linspace(0.0,30.0,500)
+z = np.linspace(0.0,30.0,250)
 traj_cmap = cm.rainbow(z/30)
 
 scat = ax.scatter(traj[:,0],traj[:,1],color=traj_cmap,alpha=0.8,s=20)
@@ -184,7 +184,10 @@ Zmag = np.linalg.norm(Zdense,axis=0).reshape((X2.T.shape[0],Y2.T.shape[0])) #.re
 #crits,stabs = crit_points(xd,Zslice)
 crits,_ = crit_pts_2d(x2,Zmag)
 
-caxis.plot_surface(X2,Y2,Zmag,alpha=0.2)
+Gx,Gy = np.gradient(Zmag)
+G = (Gx**2 + Gy**2)**0.5
+N = 2*G/G.max()
+caxis.plot_surface(X2,Y2,Zmag,alpha=0.2,facecolors=cm.jet(N))
 #caxis.plot(yd,Zslice,color='r')
 cset = caxis.contourf(X2,Y2,Zmag,zdir='z',offset=-10,cmap=cm.winter,alpha=0.1)
 cset = caxis.contourf(X2,Y2,Zmag,zdir='x',offset=-10,cmap=cm.winter,alpha=0.1)
@@ -232,7 +235,7 @@ def update(val):
     
     l.set_UVC(Z_n[0,:],Z_n[1,:])
 
-    z = np.linspace(0.0,30.0,500)
+    z = np.linspace(0.0,30.0,250)
     traj_cmap = cm.rainbow(z/30)
     #l.set_color(traj_cmap[:,z.index(cfreq)])
     
@@ -262,6 +265,10 @@ def update(val):
     #crits,stabs = crit_points(xd,Zslice)
     crits,_ = crit_pts_2d(x2,Zmag)
     
+    Gx,Gy = np.gradient(Zmag)
+    G = (Gx**2 + Gy**2)**0.5
+    N = 2*G/G.max()
+    caxis.plot_surface(X2,Y2,Zmag,alpha=0.2,facecolors=cm.jet(N))
     caxis.plot_surface(X2,Y2,Zmag,alpha=0.2)
     #caxis.plot(yd,Zslice,color='r')
     cset = caxis.contourf(X2,Y2,Zmag,zdir='z',offset=-10,cmap=cm.winter,alpha=0.1)

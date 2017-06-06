@@ -56,7 +56,7 @@ font = {'family' : 'normal',
 matplotlib.rc('font', **font)
 
 # Definition of parameters 
-a = 1.
+a = 10.
 b = 0.1
 c = 1.5
 d = 0.75
@@ -164,8 +164,8 @@ ymax = p.ylim(ymin=0)[1]                        # get axis limits
 xmax = p.xlim(xmin=0)[1] 
 nb_points   = 20                      
 
-x = linspace(0, xmax, nb_points)
-y = linspace(0, ymax, nb_points)
+x = linspace(0, 60, nb_points)
+y = linspace(0, 40, nb_points)
 
 X1 , Y1  = meshgrid(x, y)                       # create a grid
 DX1, DY1 = dX_dt([X1, Y1])                      # compute growth rate on the gridt
@@ -184,8 +184,8 @@ p.xlabel('Number of rabbits',fontsize=40)
 p.ylabel('Number of foxes',fontsize=40)
 p.legend()
 p.grid()
-p.xlim(0, xmax)
-p.ylim(0, ymax)
+p.xlim(0, 60)
+p.ylim(0, 40)
 f2.savefig('rabbits_and_foxes_2.png')
 # 
 # 

@@ -21,10 +21,10 @@ from mpl_toolkits.mplot3d import Axes3D
 global ax
 #fig, ax = plt.subplots()
 fig = plt.figure()
-tser = plt.axes([0.05, 0.25, 0.90, 0.20], axisbg='white')
-phslice = plt.axes([0.5, 0.50, 0.45, 0.45], axisbg='white',projection='3d')
+tser = plt.axes([0.05, 0.25, 0.90, 0.20], facecolor='white')
+phslice = plt.axes([0.5, 0.50, 0.45, 0.45], facecolor='white',projection='3d')
 
-ax = plt.axes([0.05, 0.50, 0.45, 0.45], axisbg='white')
+ax = plt.axes([0.05, 0.50, 0.45, 0.45], facecolor='white')
 #plt.subplots_adjust(left=0.25, bottom=0.25)
 
 
@@ -173,8 +173,8 @@ plt.axis([-mesh_lim, mesh_lim, -mesh_lim, mesh_lim])
 
 #Plot a slice of phase
 caxis = plt.axes(phslice)
-x2 = np.linspace(-mesh_lim,mesh_lim,100)
-y2 = np.linspace(-mesh_lim,mesh_lim,100)
+x2 = np.linspace(-mesh_lim,mesh_lim,20)
+y2 = np.linspace(-mesh_lim,mesh_lim,20)
 X2,Y2 = np.meshgrid(x2,y2)
 XX2 = np.array([X2.ravel(),Y2.ravel()])
 Zdense = np.array(norm_form(XX2,[],mu=mu,fc=cfreq,win=w))
@@ -206,17 +206,22 @@ caxis.plot(t,traj)
 
 #GUI plots now
 axcolor = 'lightgoldenrodyellow'
-axfreq = plt.axes([0.25, 0.1, 0.65, 0.03], axisbg=axcolor)
-axamp = plt.axes([0.25, 0.15, 0.65, 0.03], axisbg=axcolor)
-axw = plt.axes([0.25, 0.05, 0.65, 0.03], axisbg=axcolor)
+axfreq = plt.axes([0.25, 0.1, 0.65, 0.03], facecolor=axcolor)
+axamp = plt.axes([0.25, 0.15, 0.65, 0.03], facecolor=axcolor)
+axw = plt.axes([0.25, 0.05, 0.65, 0.03], facecolor=axcolor)
 
 sfreq = Slider(axfreq, 'CFreq', 0, 15.0, valinit=f0)
 samp = Slider(axamp, 'Mu', -10, 8, valinit=a0)
 sw = Slider(axw,'W factor',-0,1.0,valinit=w0)
 
 plt.draw()
+global tidx
+tidx = 0
 
 def update(val):
+    global tidx
+    tidx += 1
+    print(tidx)
     global scat, start_loc
     mu = samp.val
     cfreq = sfreq.val
@@ -291,7 +296,7 @@ sfreq.on_changed(update)
 samp.on_changed(update)
 sw.on_changed(update)
 
-resetax = plt.axes([-mesh_lim,mesh_lim,-mesh_lim,mesh_lim])
+resetax = plt.axes([0,mesh_lim,0,mesh_lim])
 button = Button(resetax, 'Reset', color=axcolor, hovercolor='0.975')
 
 def get_coord(event):
@@ -314,6 +319,9 @@ def get_coord(event):
         
         start_loc.remove()
         start_loc = ax.scatter(cx,cy,color='r',marker='>',s=300)
+        plt.draw()
+    
+        fig.canvas.draw_idle()
         
 cid = fig.canvas.mpl_connect('button_press_event',get_coord)
 #cid = fig.canvas.mpl_connect('pick_event',get_coord)
@@ -323,7 +331,7 @@ def reset(event):
     samp.reset()
 button.on_clicked(reset)
 
-rax = plt.axes([0.025, 0.5, 0.15, 0.15], axisbg=axcolor)
+rax = plt.axes([0.025, 0.5, 0.15, 0.15], facecolor=axcolor)
 radio = RadioButtons(rax, ('Hopf', 'VDPol', 'SN','global'), active=0)
 
 def setdynfunc(label):

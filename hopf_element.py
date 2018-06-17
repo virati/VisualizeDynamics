@@ -53,8 +53,8 @@ class HopfNet():
     def plot_flow(self,plot_traj=False):
         
         mesh_lim = 5
-        xd = np.linspace(-mesh_lim,mesh_lim,50)
-        yd = np.linspace(-mesh_lim,mesh_lim,50)
+        xd = np.linspace(-mesh_lim,mesh_lim,20)
+        yd = np.linspace(-mesh_lim,mesh_lim,20)
         X,Y = np.meshgrid(xd,yd)
         
         XX = np.array([X.ravel(),Y.ravel()])
@@ -81,7 +81,7 @@ class HopfNet():
             self.traj = {'X':traj,'T':tvect}
             
             plt.subplot(212)
-            plt.plot(tvect,traj)
+            plt.plot(tvect,traj,aspect='auto')
         #plt.show()
         
         #the timeseries of the trajectory

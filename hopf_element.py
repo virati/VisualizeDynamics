@@ -49,8 +49,8 @@ class HopfNet():
         self.rad = radius
         #mu now needs to be a function of the desired/input radius
         self.mu = radius
-    
-    def plot_flow(self,plot_traj=False):
+
+    def plot_flow(self,plot_traj=False,state0=(2,2)):
         
         mesh_lim = 5
         xd = np.linspace(-mesh_lim,mesh_lim,20)
@@ -65,7 +65,7 @@ class HopfNet():
         Z_n = pproc.normalize(Z.T,norm='l2').T
         #Z = Z.reshape(X.T.shape)
                 
-        plt.figure()
+        plt.figure(figsize=(20,20))
         plt.subplot(211)
         plt.quiver(X,Y,Z_n[0,:],Z_n[1,:])
         
@@ -74,14 +74,14 @@ class HopfNet():
         plt.axis('tight')
         #overlay a trajectory
         if plot_traj:
-            state0 = self.current_state
+            #state0 = self.current_state
             
             tvect,traj = self.trajectory(state0)
             plt.scatter(traj[:,0],traj[:,1])
             self.traj = {'X':traj,'T':tvect}
             
             plt.subplot(212)
-            plt.plot(tvect,traj,aspect='auto')
+            plt.plot(tvect,traj)
         #plt.show()
         
         #the timeseries of the trajectory

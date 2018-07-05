@@ -218,6 +218,9 @@ plt.draw()
 global tidx
 tidx = 0
 
+global trajectory
+trajectory = []
+
 def update(val):
     global tidx
     tidx += 1
@@ -226,6 +229,8 @@ def update(val):
     mu = samp.val
     cfreq = sfreq.val
     win = sw.val
+    
+    global trajectory
     
     #this is where the update happens!
     #l.set_ydata(amp*np.sin(2*np.pi*freq*t))
@@ -288,8 +293,13 @@ def update(val):
     #plt.scatter(xd[crits],Zmag[crits],color='red')
     
     plt.title('Start: ' + str(cx) + ',' + str(cy))
-    plt.draw()
     
+    
+    
+    ## Now let's draw the trajectory
+    
+    #Now draw the canvas and idle
+    plt.draw()
     fig.canvas.draw_idle()
 
 sfreq.on_changed(update)
@@ -299,32 +309,73 @@ sw.on_changed(update)
 resetax = plt.axes([0,mesh_lim,0,mesh_lim])
 button = Button(resetax, 'Reset', color=axcolor, hovercolor='0.975')
 
+
 def get_coord(event):
     #print(str(event.xdata) + ' ' + str(event.ydata))
     #global ax
-    if event.inaxes == ax:
-        global cx,cy,start_loc,scat
-        cx,cy = event.xdata, event.ydata
-        mu = samp.val
-        cfreq = sfreq.val
+    global scat
+    mu = samp.val
+    cfreq = sfreq.val
+            
+    if event.button == 1:
+        if event.inaxes == ax:
+            global cx,cy,start_loc
+            cx,cy = event.xdata, event.ydata
+            
+            
+            t,traj = plot_traj([cx,cy],mu=mu, fc=cfreq)
+            scat.remove()
+            z = np.linspace(0,traj.shape[0],traj.shape[0])
+            scat = ax.scatter(traj[:,0],traj[:,1],color=traj_cmap,alpha=0.8)
+            
+            curax = plt.axes(tser)
+            curax.cla()
+            plt.plot(t,traj)
+            
+            start_loc.remove()
+            start_loc = ax.scatter(cx,cy,color='r',marker='>',s=300)
+            plt.draw()
         
-        t,traj = plot_traj([cx,cy],mu=mu, fc=cfreq)
-        scat.remove()
-        z = np.linspace(0,traj.shape[0],traj.shape[0])
-        scat = ax.scatter(traj[:,0],traj[:,1],color=traj_cmap,alpha=0.8)
+            fig.canvas.draw_idle()
+    elif event.button == 3:
+        if event.inaxes == ax:
+            print('Adding Trajectory Point')
+            global trajectory
+            trajectory.append([event.xdata,event.ydata])
+            traj = np.array(trajectory)
+            for ll in range(traj.shape[0]-1):
+                ax.plot(traj[ll:ll+2,0],traj[ll:ll+2,1])
+                
+            scat = ax.scatter(traj[:,0],traj[:,1],s=200)
+            plt.draw()
+            fig.canvas.draw_idle()
+            print('trajectory plot')
+            
+            #Now actually plot the experienced dynamics for the trajectory above
+            Ztraj = []
+            for ll in range(traj.shape[0]-1):
+                x_range = np.linspace(traj[ll,0],traj[ll+1,0],40)
+                y_range = np.linspace(traj[ll,1],traj[ll+1,1],40)
+                
+                #Xtr,Ytr = np.meshgrid(x_range,y_range)
+                #XXtr = np.array([Xtr.ravel(),Ytr.ravel()])
+                XYtr = np.vstack((x_range,y_range))
+                
+                Ztr = norm_form(XYtr,[],mu=mu,fc=cfreq,win=w)
+                Ztraj.append(Ztr)
+                
+            curax = plt.axes(tser)
+            curax.cla()
+            Ztraj = np.array(Ztraj).swapaxes(1,2).reshape(-1,2,order='C')
+            print(Ztraj.shape)
+            plt.plot(Ztraj)
         
-        curax = plt.axes(tser)
-        curax.cla()
-        plt.plot(t,traj)
-        
-        start_loc.remove()
-        start_loc = ax.scatter(cx,cy,color='r',marker='>',s=300)
-        plt.draw()
-    
-        fig.canvas.draw_idle()
         
 cid = fig.canvas.mpl_connect('button_press_event',get_coord)
 #cid = fig.canvas.mpl_connect('pick_event',get_coord)
+def onpick(event):
+    print('Pick Event!')
+#ctraj = fig.canvas.mpl_connect('pick_event',onpick)
 
 def reset(event):
     sfreq.reset()

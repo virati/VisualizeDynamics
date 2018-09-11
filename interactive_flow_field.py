@@ -353,6 +353,13 @@ def get_coord(event):
             
             #Now actually plot the experienced dynamics for the trajectory above
             Ztraj = []
+            Zdiff = []
+            Thetadiff = []
+            
+            traj_vect = np.array((traj[-1,0] - traj[0,0],traj[-1,1] - traj[0,1]))
+            #traj_vect = traj_vect / np.linalg.norm(traj_vect)
+            reptraj_vect = np.tile(traj_vect.reshape(-1,1),40)
+            
             for ll in range(traj.shape[0]-1):
                 x_range = np.linspace(traj[ll,0],traj[ll+1,0],40)
                 y_range = np.linspace(traj[ll,1],traj[ll+1,1],40)
@@ -364,11 +371,20 @@ def get_coord(event):
                 Ztr = norm_form(XYtr,[],mu=mu,fc=cfreq,win=w)
                 Ztraj.append(Ztr)
                 
+                Zdiff.append(reptraj_vect - Ztr)
+                Thetadiff.append(np.dot(traj_vect,Ztr))
+                
             curax = plt.axes(tser)
             curax.cla()
             Ztraj = np.array(Ztraj).swapaxes(1,2).reshape(-1,2,order='C')
-            print(Ztraj.shape)
+            #this plots the dynamics field along the trajectory
             plt.plot(Ztraj)
+            #this should plot the difference in the trajectory from the intrinsic dynamics at each point
+            Zdiff = np.array(Zdiff).swapaxes(1,2).reshape(-1,2,order='C')
+            
+            Thetadiff = np.array(Thetadiff).reshape(-1,1)
+            print(Thetadiff.shape)
+            plt.plot(Thetadiff,linestyle='--')
         
         
 cid = fig.canvas.mpl_connect('button_press_event',get_coord)

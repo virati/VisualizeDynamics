@@ -22,17 +22,6 @@ plt.close('all')
 
 input_val = []
 
-def DEPRHopf(state,t):
-    x = state[0]
-    y = state[1]
-    mu = 1.0
-    
-    xd = mu * x - y - x * (x**2 + y**2)
-    yd = x + mu * y - y * (x**2 + y**2)
-    
-    return [xd,yd]
-
-
 class HopfNet():
     params = np.array([])
     flow = []
@@ -61,6 +50,7 @@ class HopfNet():
         mu = self.mu
         
         Z = np.array(self.norm_form(XX,t=0))
+        #Z = np.array(self.dyn(r,theta,0))
         #unit norm the Z vectors
         Z_n = pproc.normalize(Z.T,norm='l2').T
         #Z = Z.reshape(X.T.shape)
@@ -92,7 +82,14 @@ class HopfNet():
         #I don't think I want this since it makes more sense for a "stateless syste" and the "last system" is just a snapshot
         #We want this to be a stateful system, with the ability to quickly look at the dynamics on demand
         self.flow = Z
+        
     
+    def dyn(self,r,theta,b):
+        rd = b * r + a * r**3
+        thetad = w + gamma * r ** 2
+        
+        return np.array([rd,thetad])
+
     def step_time(self):
         pass
         
@@ -137,32 +134,6 @@ class HopfNet():
         
         return outv
         
-    def DEPRflow_field(self,Z,mu):
-        #Z = np.sum(Z,0)
-        #Zdot = Z*((lamba + 1j) + b * np.abs(Z)**2)
-        
-        #hopf normal form? https://www.google.com/url?sa=t&rct=j&q=&esrc=s&source=web&cd=1&cad=rja&uact=8&ved=0ahUKEwjMw9SN45LRAhUI8mMKHc0SBysQFggcMAA&url=http%3A%2F%2Fmath.arizona.edu%2F~lega%2F454%2FFall06%2FHopf_Bifurcation.pdf&usg=AFQjCNGN5Yo3ENxTo0DPuZLK6oEVXEw5kQ&sig2=eQltwhu0htUC_oGeEnwlGQ
-        x = Z[0,:]
-        y = Z[1,:]
-        
-        #xt = mu * Z[0,:] + Z[1,:]
-        #yt = -Z[0,:] + mu * Z[1,:] - Z[0,:]**2 * Z[1,:]
-        
-        xt = mu * x - y - x * (x**2 + y**2)
-        yt = x + mu * y - y * (x**2 + y**2)
-        
-        #Very Simple Identity Linear System
-        #xt = Z[0,:]
-        #yt = Z[1,:]
-        
-        #Stack em back and return the vector field
-        Z = np.vstack((xt.T,yt.T))
-        
-        return Z
-   
-#state0 = [12.0,13.0]
-#t = np.arange(0.0,30.0,0.01)
-#traj = odeint(Hopf,state0,t)
 
 def main():
     
@@ -172,34 +143,7 @@ def main():
             
             simpleNet.plot_flow()
             #traj = simpleNet.trajectory([12.0,13.0])
-            #simpleNet.tf_traj()
-            
-            
-    ##%%
-    #How do we actually change the "radius" of our limit cycle?
-    #This could/will correspond to the overall binarization/discrimination of the system
-    #center freq is DIFFERENT -> gives us an idea of how to go around in time; adjustst the flow field amplitudes, but once the limit cycle reached, it just is
-    #R is different -> gives us a 2dimensional system
-    #Where one is the limit cycle r; the other is the \dot{theta}
-    
-    
-    
-    ##Now we're going to stage our dynamical system -> this is MODELING SWITCHING
-    ##from t=0 to 5 seconds, we'll have mu = -1
-    ##then we switch to mu = 1
-    #
-    ##This is SHIT right now
-    #tvect = np.linspace(0,10,10)
-    #simpleNet = HopfNet()
-    #
-    #for tt in tvect:
-    #    if tt < 5:
-    #        tmu = -1
-    #    elif tt >= 5:
-    #        tmu = 1
-    #        
-    #    simpleNet.plot_flow(mu=tmu)
-    #    
+
     plt.show()
     
 main()

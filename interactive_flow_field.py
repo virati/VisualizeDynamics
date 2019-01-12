@@ -75,6 +75,22 @@ def H_norm_form(state,t,mu,fc,win=0.5):
     outv = fc * np.array([xd,yd])
     return outv
 
+
+def mod_H(state,t,mu,fc,win=0.5):
+    x = state[0]
+    y = state[1]
+    
+    #these two can shape peakiness, be used for PAC?
+    w = win
+    q = 1-w
+
+    xd = w * (mu * x - y - x * (x**2 + y**2))
+    yd = q * (x + mu * y - y * (x**2 + y**2))
+    
+    outv = fc * np.array([xd,yd])
+    return outv
+
+
 def SN_norm_form(state,t,mu,fc,win):
     x = state[0]
     y = state[1]
@@ -160,7 +176,7 @@ ax.axhline(y=0,color='r')
 global scat, start_loc
 #plt.subplot(2,2,1)
 #z = np.linspace(0,1,t.shape[0])
-z = np.linspace(0.0,30.0,250)
+z = np.linspace(0.0,30.0,500)
 traj_cmap = cm.rainbow(z/30)
 
 scat = ax.scatter(traj[:,0],traj[:,1],color=traj_cmap,alpha=0.8,s=20)
@@ -245,7 +261,7 @@ def update(val):
     
     l.set_UVC(Z_n[0,:],Z_n[1,:])
 
-    z = np.linspace(0.0,30.0,250)
+    z = np.linspace(0.0,30.0,500)
     traj_cmap = cm.rainbow(z/30)
     #l.set_color(traj_cmap[:,z.index(cfreq)])
     

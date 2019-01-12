@@ -27,7 +27,7 @@ def simple_rad(state):
     
     return np.array([dot_r,dot_theta])
 
-class dyn_sys(dyn_net):
+class dyn_sys:
     def __init__(self,systype):
         pass
         self.set_sys(systype)

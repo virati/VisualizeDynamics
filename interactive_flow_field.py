@@ -18,6 +18,8 @@ import scipy.signal as sig
 
 from mpl_toolkits.mplot3d import Axes3D
 
+from dyn_lib import *
+
 global ax
 #fig, ax = plt.subplots()
 fig = plt.figure()
@@ -26,8 +28,6 @@ phslice = plt.axes([0.5, 0.50, 0.45, 0.45], facecolor='white',projection='3d')
 
 ax = plt.axes([0.05, 0.50, 0.45, 0.45], facecolor='white')
 #plt.subplots_adjust(left=0.25, bottom=0.25)
-
-
 
 t = np.arange(0.0, 1.0, 0.001)
 a0 = 0
@@ -61,77 +61,14 @@ def crit_pts_2d(x,y):
     bcrit_idxs = sig.argrelextrema(np.abs(y),np.less_equal)[0]
     return bcrit_idxs,[]
     
-def H_norm_form(state,t,mu,fc,win=0.5):
-    x = state[0]
-    y = state[1]
-    
-    #these two can shape peakiness, be used for PAC?
-    w = win
-    q = 1-w
 
-    xd = w * (mu * x - y - x * (x**2 + y**2))
-    yd = q * (x + mu * y - y * (x**2 + y**2))
-    
-    outv = fc * np.array([xd,yd])
-    return outv
-
-
-def mod_H(state,t,mu,fc,win=0.5):
-    x = state[0]
-    y = state[1]
-    
-    #these two can shape peakiness, be used for PAC?
-    w = win
-    q = 1-w
-
-    xd = w * (mu * x - y - x * (x**2 + y**2))
-    yd = q * (x + mu * y - y * (x**2 + y**2))
-    
-    outv = fc * np.array([xd,yd])
-    return outv
-
-
-def SN_norm_form(state,t,mu,fc,win):
-    x = state[0]
-    y = state[1]
-    
-    #these two can shape peakiness, be used for PAC?
-
-    xd = mu - x**2
-    yd = -y
-    
-    outv = fc * np.array([xd,yd])
-    return outv
-
-def global_norm_form(state,t,mu,fc,win):
-    x = state[0]
-    y = state[1]
-    
-    #these two can shape peakiness, be used for PAC?
-
-    xd = y
-    yd = mu * y + x - x**2 + x * y
-    
-    outv = fc * np.array([xd,yd])
-    return outv
-
-    
-def VDP_norm_form(state,t,mu,fc,win):
-    x = state[0]
-    y = state[1]
-    
-    #these two can shape peakiness, be used for PAC?
-
-    xd = win * mu * x - y**2 * x - y
-    yd = x
-    
-    outv = fc * np.array([xd,yd])
-    return outv
 
 def norm_form(state,t,mu,fc,win):
     global systype
     if systype == 'Hopf':
-        dofunc = H_norm_form
+        #dofunc = H_norm_form
+        #dofunc = mod_H
+        dofunc = var_H
     elif systype == 'VDPol':
         dofunc = VDP_norm_form
     elif systype == 'SN':

@@ -108,14 +108,16 @@ t,traj = plot_traj([cx,cy],mu=mu,fc=cfreq,win=w)
 #plt.ion()
 #
 
+## Do the vector field here
 l = plt.quiver(X[:],Y[:],Z_n[0,:],Z_n[1,:],width=0.01,alpha=0.4)
 ax.axhline(y=0,color='r')
 global scat, start_loc
 #plt.subplot(2,2,1)
 #z = np.linspace(0,1,t.shape[0])
+
+# Do trajectory here
 z = np.linspace(0.0,30.0,500)
 traj_cmap = cm.rainbow(z/30)
-
 scat = ax.scatter(traj[:,0],traj[:,1],color=traj_cmap,alpha=0.8,s=20)
 #Try to do a continuous trajectory, with colors
 #scat = ax.plot(traj[:,0],traj[:,1],alpha=0.8,color=traj_cmap)
@@ -140,7 +142,7 @@ crits,_ = crit_pts_2d(x2,Zmag)
 Gx,Gy = np.gradient(Zmag)
 G = (Gx**2 + Gy**2)**0.5
 N = 2*G/G.max()
-caxis.plot_surface(X2,Y2,Zmag,alpha=0.2,facecolors=cm.jet(N))
+caxis.plot_surface(X2,Y2,1/10*Zmag,alpha=0.2,facecolors=cm.jet(N))
 #caxis.plot(yd,Zslice,color='r')
 cset = caxis.contourf(X2,Y2,Zmag,zdir='z',offset=-10,cmap=cm.winter,alpha=0.1)
 cset = caxis.contourf(X2,Y2,Zmag,zdir='x',offset=-10,cmap=cm.winter,alpha=0.1)

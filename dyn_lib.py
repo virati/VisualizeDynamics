@@ -42,9 +42,11 @@ def var_H(state,t,mu,fc,win=0.5):
     y = state[1]
     
     z = x + 1j * y
-    w = 0.2
+    w = 10
+    
     #zdot = -z * (-mu + 2*np.abs(z)**2 + 1j * z * (fc*w/np.abs(z)**2))
-    zdot = -z * (-mu + 2*np.abs(z)**2 + w*1j - 10*1j * np.abs(z)**2)
+    #zdot = -z * (-mu + 2*np.abs(z)**2 + w*1j - 10*1j * np.abs(z)**2)
+    zdot = -z * (-mu + 2*np.abs(z)**2 + w*1j*np.exp(-np.abs(z)))
     xchange = (np.real(zdot))
     ychange = (np.imag(zdot))
     

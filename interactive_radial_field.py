@@ -19,14 +19,6 @@ from sklearn import preprocessing as pproc
 
 from mpl_toolkits.mplot3d import Axes3D
 
-def simple_rad(state):
-    r = state[0,:]
-    theta = state[1,:]
-    
-    dot_r = 0*r
-    dot_theta = 0.2 + 0*theta
-    
-    return np.array([dot_r,dot_theta])
 
 class dyn_sys:
     def __init__(self,systype):
@@ -145,18 +137,28 @@ class iface:
         
         plt.cla()
         mesh_lim = 3
-        mesh_res = 20
-        rd = np.linspace(-mesh_lim,mesh_lim,mesh_res)
-        thd = np.linspace(-mesh_lim,mesh_lim,mesh_res)
-        R,TH = np.meshgrid(rd,thd)
-        RR = np.array([R.ravel(),TH.ravel()])
-        
-        Z = np.array(self.dyn_field(RR))
-        #pdb.set_trace()
+        mesh_res = 50
+        xd = np.linspace(-mesh_lim,mesh_lim,mesh_res)
+        yd = np.linspace(-mesh_lim,mesh_lim,mesh_res)
+        X,Y = np.meshgrid(xd,yd)
+        XX = np.array([X.ravel(),Y.ravel()])
+        mu = a0
+        cfreq = f0
+        w = w0
+        Z = np.array(self.dyn_field(XX,fc=cfreq,win=w))
         Z_n = pproc.normalize(Z.T,norm='l2').T
         
+                             
+        t,traj = plot_traj([cx,cy],mu=mu,fc=cfreq,win=w)
+        #for 1d data
+        #l, = plt.plot(t, s, lw=2, color='red')
         
-        self.quiv =  self.field.quiver(TH[:],R[:],np.cos(Z_n[1,:]) - np.sin(Z_n[1,:]),np.sin(Z_n[0,:]) + np.cos(Z_n[0,:]),width=0.01,alpha=0.4)
+        #plt.ion()
+        #
+        
+        ## Do the vector field here
+        l = plt.quiver(X[:],Y[:],Z_n[0,:],Z_n[1,:],width=0.01,alpha=0.4)
+        ax.axhline(y=0,color='r')
     
     def mg_compute(self):
         mesh_lim = 3

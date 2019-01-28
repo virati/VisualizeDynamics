@@ -45,6 +45,41 @@ cx = 4
 cy = -2
 
 
+'''
+Helper function from: https://stackoverflow.com/questions/34017866/arrow-on-a-line-plot-with-matplotlib
+'''
+def add_arrow(line, position=None, direction='right', size=15, color=None):
+    """
+    add an arrow to a line.
+
+    line:       Line2D object
+    position:   x-position of the arrow. If None, mean of xdata is taken
+    direction:  'left' or 'right'
+    size:       size of the arrow in fontsize points
+    color:      if None, line color is taken.
+    """
+    if color is None:
+        color = line.get_color()
+
+    xdata = line.get_xdata()
+    ydata = line.get_ydata()
+
+    if position is None:
+        position = xdata.mean()
+    # find closest index
+    start_ind = np.argmin(np.absolute(xdata - position))
+    if direction == 'right':
+        end_ind = start_ind + 1
+    else:
+        end_ind = start_ind - 1
+
+    line.axes.annotate('',
+        xytext=(xdata[start_ind], ydata[start_ind]),
+        xy=(xdata[end_ind], ydata[end_ind]),
+        arrowprops=dict(arrowstyle="->", color=color),
+        size=size
+    )
+    
 def crit_points(x,y):
     bcrit_idxs = sig.argrelextrema(np.abs(y),np.less_equal)[0]
     
@@ -299,7 +334,9 @@ def get_coord(event):
             trajectory.append([event.xdata,event.ydata])
             traj = np.array(trajectory)
             for ll in range(traj.shape[0]-1):
-                ax.plot(traj[ll:ll+2,0],traj[ll:ll+2,1])
+                #line = ax.plot(traj[ll:ll+2,0],traj[ll:ll+2,1])
+                line = plt.plot(traj[ll:ll+2,0],traj[ll:ll+2,1])
+                add_arrow(line[0])
                 
             scat = ax.scatter(traj[:,0],traj[:,1],s=200)
             plt.draw()
@@ -339,7 +376,8 @@ def get_coord(event):
             
             Thetadiff = np.array(Thetadiff).reshape(-1,1)
             print(Thetadiff.shape)
-            plt.plot(Thetadiff,linestyle='--')
+            plt.plot(Thetadiff,linestyle='--',linewidth=10)
+            
         
         
 cid = fig.canvas.mpl_connect('button_press_event',get_coord)

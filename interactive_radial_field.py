@@ -18,7 +18,7 @@ import scipy.signal as sig
 from sklearn import preprocessing as pproc
 
 from mpl_toolkits.mplot3d import Axes3D
-
+from dyn_lib import *
 
 class dyn_sys:
     def __init__(self,systype):
@@ -40,7 +40,7 @@ class iface:
         self.phslice = plt.axes([0.5, 0.50, 0.45, 0.45], facecolor='white',projection='3d')
         
         #This is the main field I think
-        self.field = plt.axes([0.05, 0.50, 0.45, 0.45], facecolor='white',projection='polar')
+        self.field = plt.axes([0.05, 0.50, 0.45, 0.45], facecolor='white')
         
         axcolor = 'lightgoldenrodyellow'
         self.axfreq = plt.axes([0.25, 0.1, 0.65, 0.03], facecolor=axcolor)
@@ -54,6 +54,13 @@ class iface:
         self.sfreq.on_changed(self.update)
         self.samp.on_changed(self.update)
         self.sw.on_changed(self.update)
+        
+        self.a0 = 0
+        self.f0 = 3
+        self.w0 = 0.5
+        
+        self.set_dyn(H_norm_form)
+        self.update()
         
     
     def mouse_coord(self,event):
@@ -142,19 +149,16 @@ class iface:
         yd = np.linspace(-mesh_lim,mesh_lim,mesh_res)
         X,Y = np.meshgrid(xd,yd)
         XX = np.array([X.ravel(),Y.ravel()])
-        mu = a0
-        cfreq = f0
-        w = w0
+        mu = self.a0
+        cfreq = self.f0
+        w = self.w0
+        
+        
         Z = np.array(self.dyn_field(XX,fc=cfreq,win=w))
         Z_n = pproc.normalize(Z.T,norm='l2').T
         
                              
         t,traj = plot_traj([cx,cy],mu=mu,fc=cfreq,win=w)
-        #for 1d data
-        #l, = plt.plot(t, s, lw=2, color='red')
-        
-        #plt.ion()
-        #
         
         ## Do the vector field here
         l = plt.quiver(X[:],Y[:],Z_n[0,:],Z_n[1,:],width=0.01,alpha=0.4)
@@ -174,9 +178,8 @@ class iface:
         Z_n = pproc.normalize(Z.T,norm='l2').T
     
 
-    def update(self,val):
-        #caxis.plot(t,traj)
-        #curax = plt.axes(self.field)
+    def update(self):
+        
         self.plot_field()
         
         

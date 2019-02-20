@@ -48,7 +48,7 @@ cy = -2
 '''
 Helper function from: https://stackoverflow.com/questions/34017866/arrow-on-a-line-plot-with-matplotlib
 '''
-def add_arrow(line, position=None, direction='right', size=15, color=None):
+def add_arrow(line, position=None, direction='right', size=50, color=None):
     """
     add an arrow to a line.
 
@@ -277,12 +277,13 @@ def update(val):
     caxis.set_xlim((-2,2))
     caxis.set_ylim((-2,2))
     caxis.set_zlim((0,20))
+    caxis.set_axis_off()
     
     #caxis.plot(xd[crits],Zslice[crits],'o',color='red')
     #caxis.scatter(X[crits],Y[crits],Zslice[crits],color='red')
     #plt.scatter(xd[crits],Zmag[crits],color='red')
     
-    plt.title('Start: ' + str(cx) + ',' + str(cy))
+    #plt.title('Start: ' + str(cx) + ',' + str(cy))
     
     
     
@@ -335,7 +336,7 @@ def get_coord(event):
             traj = np.array(trajectory)
             for ll in range(traj.shape[0]-1):
                 #line = ax.plot(traj[ll:ll+2,0],traj[ll:ll+2,1])
-                line = plt.plot(traj[ll:ll+2,0],traj[ll:ll+2,1])
+                line = ax.plot(traj[ll:ll+2,0],traj[ll:ll+2,1],color='k')
                 add_arrow(line[0])
                 
             scat = ax.scatter(traj[:,0],traj[:,1],s=200)
@@ -347,6 +348,7 @@ def get_coord(event):
             Ztraj = []
             Zdiff = []
             Thetadiff = []
+            Thetamag = []
             
             traj_vect = np.array((traj[-1,0] - traj[0,0],traj[-1,1] - traj[0,1]))
             #traj_vect = traj_vect / np.linalg.norm(traj_vect)
@@ -365,6 +367,7 @@ def get_coord(event):
                 
                 Zdiff.append(reptraj_vect - Ztr)
                 Thetadiff.append(np.dot(traj_vect,Ztr))
+                Thetamag.append(np.linalg.norm(Zdiff[-1]))
                 
             curax = plt.axes(tser)
             curax.cla()

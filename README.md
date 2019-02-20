@@ -1,17 +1,27 @@
 # Dynamical Network
 
 ## Overview
-This project is an attempt to build a framework for studying networks of dynamical systems. The goal of this is to merge this with efforts to understand empirical electrophysiologic changes in mood disorders.
+This is a small library to study low-dimensional dynamical systems using intuitive UI and [autoLie](https://github.com/virati/autoLie)
 
 ## Dynamical System Viewer
 Right now, the most complete portion of this repo is the Dynamical System Viewer (interactive_flow_field.py). Below is a quick visual overview of what this tool does.
 
-![alt-text](Imgs/2017-01-02-205147_1920x1080_scrot.png "Frontend")
+![alt-text](Imgs/VizDyn_utraj.png "Frontend")
 
-On the right half of the screen is the viewer. The top left shows the 2d phase portrait of the system, along with a trajector with a clickable starting point. The trajectory itself is color coded based on the time of the state.
+The viewer itself has several components
 
-The left side has a beige clickbox array that enables you to choose the dynamical system you want to explore.
+### Phase space
+The top left consists of a phase-space representation of our dynamical system and an example trajectory from a given initial state.
 
-The top right is a surrogate of the potential field for the dynamical system. It is computed by finding the L2 norm of the flow at every x,y coordinate and plotting that as the z (height) of the 3d mesh
-The middle row is a timeseries of the two dimensions
-The bottom row is a set of interactive sliders to adjust mu (the bifurcation parameter), the frequency (a uniform weight on the dynamics equations for both variables), and a context-specific 'w' factor, which is a work in progress. Right now, in the Hopf system, this factor adjusts the weight to give a convex combination of the two directions of flow, giving interesting shapes to the dynamics.
+Dynamics selection amongst a set of pre-defined systems can be done using the checkbox.
+
+
+### Potential-like function
+On the top right is a potential-like function that computes the gradient of a the magnitude of change.
+
+It must be mentioned that this is not the potential function itself as such a function may not be exist for all systems. Indeed, for oscillatory systems a potential function does not exist as flows occur down a potential gradient but an oscillatory system has a periodicity in its state trajectory over time that indicates it cannot always be going down a gradient.
+
+## Control signal
+A relatively new feature is in the identification of a control system for the implementation of an arbitrary piecewise linear trajectory. Left clicking in the phase-portrait representation at various locations traces out a desired trajectory. The required control signal input to implement that trajectory is then displayed in the middle timeseries panel as a dotted green line.
+
+This is an in-development feature of the UI but will be expanded on to enable arbitrary control-affine coupling into the dynamics of the system. In addition, the control will be abstracted into the backend library to enable integration with autoLie and broader efforts to identify optimal control strategies for simplified dynamical systems in a way that is intuitive to the visual/clinical learners.

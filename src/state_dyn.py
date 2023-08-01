@@ -1,17 +1,10 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
-"""
-Created on Mon Aug 20 13:09:17 2018
-
-@author: virati
-Example statespace to measurement space
-"""
-
+#%%
 import numpy as np
 import matplotlib.pyplot as plt
 
 import scipy.signal as sig
 
+#%%
 class state_space:
     t = []
     x = []

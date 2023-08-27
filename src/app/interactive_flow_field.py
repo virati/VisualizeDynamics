@@ -12,13 +12,8 @@ import matplotlib.pyplot as plt
 from matplotlib.widgets import Slider, Button, RadioButtons
 from sklearn import preprocessing as pproc
 from scipy.integrate import odeint
-import pdb
 import matplotlib.cm as cm
 import scipy.signal as sig
-
-from mpl_toolkits.mplot3d import Axes3D
-
-from dyn_lib import *
 
 global ax
 #fig, ax = plt.subplots()

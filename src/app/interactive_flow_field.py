@@ -15,6 +15,9 @@ from scipy.integrate import odeint
 import matplotlib.cm as cm
 import scipy.signal as sig
 
+#%%
+
+
 global ax
 #fig, ax = plt.subplots()
 fig = plt.figure()
@@ -90,15 +93,65 @@ def crit_points(x,y):
 def crit_pts_2d(x,y):
     bcrit_idxs = sig.argrelextrema(np.abs(y),np.less_equal)[0]
     return bcrit_idxs,[]
+
+def H_norm_form(state,t,mu,fc,win=0.5):
+    x = state[0]
+    y = state[1]
     
+    #these two can shape peakiness, be used for PAC?
+    w = win
+    q = 1-w
+
+    xd = w * (mu * x - y - x * (x**2 + y**2))
+    yd = q * (x + mu * y - y * (x**2 + y**2))
+    
+    outv = fc * np.array([xd,yd])
+    return outv
+
+def SN_norm_form(state,t,mu,fc,win):
+    x = state[0]
+    y = state[1]
+    
+    #these two can shape peakiness, be used for PAC?
+
+    xd = mu - x**2
+    yd = -y
+    
+    outv = fc * np.array([xd,yd])
+    return outv
+
+def global_norm_form(state,t,mu,fc,win):
+    x = state[0]
+    y = state[1]
+    
+    #these two can shape peakiness, be used for PAC?
+
+    xd = y
+    yd = mu * y + x - x**2 + x * y
+    
+    outv = fc * np.array([xd,yd])
+    return outv
+
+    
+def VDP_norm_form(state,t,mu,fc,win):
+    x = state[0]
+    y = state[1]
+    
+    #these two can shape peakiness, be used for PAC?
+
+    xd = win * mu * x - y**2 * x - y
+    yd = x
+    
+    outv = fc * np.array([xd,yd])
+    return outv    
 
 
 def norm_form(state,t,mu,fc,win):
     global systype
     if systype == 'Hopf':
-        #dofunc = H_norm_form
+        dofunc = H_norm_form
         #dofunc = mod_H
-        dofunc = var_H
+        #dofunc = var_H
     elif systype == 'VDPol':
         dofunc = VDP_norm_form
     elif systype == 'SN':

@@ -1,7 +1,7 @@
 [project]
-name = "visualizedynamics"
-version = "0.1.0"
-description = "Add your description here"
+name = "vizdyn"
+version = "0.2.0"
+description = "App to visualize dynamics in various ways."
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [

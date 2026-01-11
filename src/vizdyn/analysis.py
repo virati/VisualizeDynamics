@@ -114,7 +114,11 @@ def find_critical_points(
     stability = np.zeros(shape=critical_indices.shape)
 
     for idx, i in enumerate(critical_indices):
-        stability[idx] = np.sign(ydiff[i])
+        # Handle boundary case where critical point is at last index
+        if i < len(ydiff):
+            stability[idx] = np.sign(ydiff[i])
+        else:
+            stability[idx] = 0  # Unknown stability at boundary
 
     return critical_indices, stability
 

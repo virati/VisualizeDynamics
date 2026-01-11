@@ -6,288 +6,307 @@ Interactive Flow Field Visualization
 Created on Wed Dec 28 14:00:03 2016
 @author: virati
 Inspired/based on code from: http://matplotlib.org/examples/widgets/slider_demo.html
+
+Refactored to separate concerns:
+- plotting.py: All visualization logic
+- gui_components.py: GUI widgets and event handling
+- interactive_flow_field.py: Main application orchestration
 """
 
-import sys
-from pathlib import Path
-
-# Add src to path
-sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
-
-import numpy as np
 import matplotlib.pyplot as plt
-from matplotlib.widgets import Slider, Button, RadioButtons
 
-from vizdyn.systems import get_system
-from vizdyn.analysis import (
-    compute_trajectory,
-    compute_flow_field,
-    compute_field_magnitude,
-    compute_trajectory_dynamics,
-)
-from vizdyn.visualization import (
-    add_arrow,
-    plot_vector_field,
-    plot_trajectory,
-    plot_start_marker,
-    plot_phase_surface,
-    plot_contour_projections,
-)
+from vizdyn.frontend.plotting import FlowFieldPlotter
+from vizdyn.frontend.gui_components import GUIManager, EventHandler, StateManager
 
 
-class InteractiveFlowField:
-    """Interactive visualization of dynamical systems flow fields."""
+class InteractiveFFGui:
+    """
+    Interactive visualization of dynamical systems flow fields.
+
+    This is the main orchestrator that coordinates between:
+    - StateManager: Application state
+    - FlowFieldPlotter: Visualization logic
+    - GUIManager: GUI widgets
+    - EventHandler: User interactions
+    """
 
     def __init__(self):
+        """Initialize the interactive flow field application."""
         # Configuration
         self.mesh_lim = 3
         self.mesh_res = 50
-        self.system_type = 'Hopf'
 
-        # Initial parameters
-        self.mu = 0
-        self.cfreq = 3
-        self.w = 0.5
+        # Initialize components
+        self.state = StateManager(system_type="Hopf", mu=0, cfreq=3, w=0.5, cx=4, cy=-2)
 
-        # Initial state
-        self.cx = 4
-        self.cy = -2
+        self.plotter = FlowFieldPlotter(mesh_lim=self.mesh_lim, mesh_res=self.mesh_res)
 
-        # Trajectory tracking
-        self.tidx = 0
-        self.trajectory_points = []
-
-        # Create figure and axes
+        # Setup figure and axes
         self._setup_figure()
+
+        # Initialize GUI components
+        self.gui = GUIManager(
+            self.fig,
+            initial_params={
+                "mu": self.state.mu,
+                "cfreq": self.state.cfreq,
+                "w": self.state.w,
+            },
+        )
+
+        # Initialize event handler
+        self.event_handler = EventHandler(
+            self.main_ax, self.tser_ax, self.plotter, mesh_lim=self.mesh_lim
+        )
 
         # Create initial plots
         self._initialize_plots()
 
-        # Setup GUI controls
-        self._setup_controls()
-
-        # Connect events
-        self._connect_events()
+        # Connect all callbacks
+        self._connect_callbacks()
 
     def _setup_figure(self):
         """Setup the figure and axes layout."""
         self.fig = plt.figure()
 
         # Time series plot
-        self.tser_ax = plt.axes([0.05, 0.25, 0.90, 0.20], facecolor='white')
+        self.tser_ax = plt.axes([0.05, 0.25, 0.90, 0.20], facecolor="white")
 
         # Phase space 3D plot
-        self.phslice_ax = plt.axes([0.5, 0.50, 0.45, 0.45],
-                                    facecolor='white', projection='3d')
+        self.phslice_ax = plt.axes(
+            [0.5, 0.50, 0.45, 0.45], facecolor="white", projection="3d"
+        )
 
         # Main 2D phase plot
-        self.main_ax = plt.axes([0.05, 0.50, 0.45, 0.45], facecolor='white')
+        self.main_ax = plt.axes([0.05, 0.50, 0.45, 0.45], facecolor="white")
 
     def _initialize_plots(self):
-        """Create initial plots."""
-        # Get current system
-        system = get_system(self.system_type, mu=self.mu, fc=self.cfreq, win=self.w)
+        """Create initial plots using the plotter."""
+        system = self.state.get_current_system()
+        initial_state = self.state.get_initial_state()
 
-        # Compute flow field
-        X, Y, Z = compute_flow_field(
-            system,
-            xlim=(-self.mesh_lim, self.mesh_lim),
-            ylim=(-self.mesh_lim, self.mesh_lim),
-            resolution=self.mesh_res,
-            normalize=True
+        # Setup 2D phase plot
+        self.vector_field, self.traj_scatter, self.start_marker = (
+            self.plotter.setup_2d_phase_plot(self.main_ax, system, initial_state)
         )
 
-        # Plot vector field
-        self.vector_field = plot_vector_field(self.main_ax, X, Y, Z)
-        self.main_ax.axhline(y=0, color='r')
-        self.main_ax.axis([-self.mesh_lim, self.mesh_lim,
-                           -self.mesh_lim, self.mesh_lim])
-
-        # Compute and plot trajectory
-        t, traj = compute_trajectory(system, (self.cx, self.cy))
-        self.traj_scatter = plot_trajectory(self.main_ax, traj)
-        self.start_marker = plot_start_marker(self.main_ax, self.cx, self.cy)
-
-        # Plot phase space surface
-        self._update_phase_surface(system)
+        # Setup phase surface
+        self.plotter.update_phase_surface(self.phslice_ax, system)
 
         # Plot time series
-        self.tser_ax.plot(t, traj)
+        self.plotter.plot_timeseries(self.tser_ax, system, initial_state)
 
-    def _update_phase_surface(self, system):
-        """Update the 3D phase space surface plot."""
-        self.phslice_ax.cla()
-
-        X2, Y2, Zmag = compute_field_magnitude(
-            system,
-            xlim=(-self.mesh_lim, self.mesh_lim),
-            ylim=(-self.mesh_lim, self.mesh_lim),
-            resolution=20
+    def _connect_callbacks(self):
+        """Connect all GUI callbacks and event handlers."""
+        # Connect GUI widget callbacks
+        self.gui.connect_callbacks(
+            update_callback=self.on_parameter_update,
+            reset_callback=self.on_reset,
+            system_callback=self.on_system_change,
         )
 
-        # Plot surface
-        plot_phase_surface(self.phslice_ax, X2, Y2, Zmag)
+        # Connect mouse events
+        self.fig.canvas.mpl_connect("button_press_event", self.on_mouse_click)
 
-        # Add plain surface overlay
-        self.phslice_ax.plot_surface(X2, Y2, Zmag, alpha=0.2)
+    def on_parameter_update(self, val):
+        """
+        Callback for parameter slider updates.
 
-        # Plot contour projections
-        plot_contour_projections(self.phslice_ax, X2, Y2, Zmag, offset=10)
+        Parameters
+        ----------
+        val : float
+            Slider value (not used, we query all sliders)
+        """
+        # Get current parameters from GUI
+        params = self.gui.get_parameter_values()
 
-        # Set limits and styling
-        self.phslice_ax.set_zlim((0, 20))
+        # Update state
+        self.state.update_parameters(params["mu"], params["cfreq"], params["w"])
 
-    def _setup_controls(self):
-        """Setup GUI controls (sliders, buttons, radio)."""
-        axcolor = 'lightgoldenrodyellow'
+        print(self.state.update_counter)
 
-        # Sliders
-        axfreq = plt.axes([0.25, 0.1, 0.65, 0.03], facecolor=axcolor)
-        axamp = plt.axes([0.25, 0.15, 0.65, 0.03], facecolor=axcolor)
-        axw = plt.axes([0.25, 0.05, 0.65, 0.03], facecolor=axcolor)
+        # Get updated system
+        system = self.state.get_current_system()
+        initial_state = self.state.get_initial_state()
 
-        self.sfreq = Slider(axfreq, 'CFreq', 0, 15.0, valinit=self.cfreq)
-        self.samp = Slider(axamp, 'Mu', -10, 8, valinit=self.mu)
-        self.sw = Slider(axw, 'W factor', 0, 1.0, valinit=self.w)
-
-        # Reset button
-        resetax = plt.axes([0, self.mesh_lim, 0, self.mesh_lim])
-        self.button = Button(resetax, 'Reset', color=axcolor, hovercolor='0.975')
-
-        # Radio buttons for system selection
-        rax = plt.axes([0.025, 0.5, 0.15, 0.15], facecolor=axcolor)
-        self.radio = RadioButtons(rax, ('Hopf', 'VDPol', 'SN', 'global'), active=0)
-
-    def _connect_events(self):
-        """Connect event handlers."""
-        self.sfreq.on_changed(self.update)
-        self.samp.on_changed(self.update)
-        self.sw.on_changed(self.update)
-        self.button.on_clicked(self.reset)
-        self.radio.on_clicked(self.set_system_type)
-        self.fig.canvas.mpl_connect('button_press_event', self.on_click)
-
-    def update(self, val):
-        """Update callback for sliders."""
-        self.tidx += 1
-        print(self.tidx)
-
-        # Get current parameter values
-        self.mu = self.samp.val
-        self.cfreq = self.sfreq.val
-        self.w = self.sw.val
-
-        # Get current system
-        system = get_system(self.system_type, mu=self.mu, fc=self.cfreq, win=self.w)
-
-        # Update flow field
-        X, Y, Z = compute_flow_field(
+        # Update all plots
+        self.traj_scatter, self.start_marker = self.plotter.update_all_plots(
+            self.main_ax,
+            self.tser_ax,
+            self.phslice_ax,
             system,
-            xlim=(-self.mesh_lim, self.mesh_lim),
-            ylim=(-self.mesh_lim, self.mesh_lim),
-            resolution=self.mesh_res,
-            normalize=True
+            initial_state,
+            self.vector_field,
+            self.traj_scatter,
+            self.start_marker,
         )
 
-        self.vector_field.set_UVC(Z[0, :], Z[1, :])
-
-        # Update trajectory
-        t, traj = compute_trajectory(system, (self.cx, self.cy))
-
-        self.traj_scatter.remove()
-        self.traj_scatter = plot_trajectory(self.main_ax, traj)
-
-        self.start_marker.remove()
-        self.start_marker = plot_start_marker(self.main_ax, self.cx, self.cy)
-
-        # Update time series
-        self.tser_ax.cla()
-        self.tser_ax.plot(t, traj)
-
-        # Update phase surface
-        self._update_phase_surface(system)
-        self.phslice_ax.set_xlim((-2, 2))
-        self.phslice_ax.set_ylim((-2, 2))
-        self.phslice_ax.set_zlim((0, 20))
-        self.phslice_ax.set_axis_off()
-
+        # Redraw
         plt.draw()
         self.fig.canvas.draw_idle()
 
-    def on_click(self, event):
-        """Handle mouse click events."""
+    def on_reset(self, event):
+        """
+        Callback for reset button.
+
+        Parameters
+        ----------
+        event : matplotlib.backend_bases.Event
+            Button click event
+        """
+        self.gui.reset_sliders()
+
+    def on_system_change(self, label: str):
+        """
+        Callback for system type radio button.
+
+        Parameters
+        ----------
+        label : str
+            Selected system type
+        """
+        self.state.set_system_type(label)
+        self.fig.canvas.draw_idle()
+
+    def on_mouse_click(self, event):
+        """
+        Callback for mouse click events.
+
+        Parameters
+        ----------
+        event : matplotlib.backend_bases.MouseEvent
+            Mouse event
+        """
+        # Only handle clicks in the main axes
         if event.inaxes != self.main_ax:
             return
 
-        system = get_system(self.system_type, mu=self.mu, fc=self.cfreq, win=self.w)
+        system = self.state.get_current_system()
 
-        if event.button == 1:  # Left click - new trajectory
-            self.cx, self.cy = event.xdata, event.ydata
+        if event.button == 1:  # Left click - new initial condition
+            self.traj_scatter, self.start_marker, new_state = (
+                self.event_handler.handle_left_click(
+                    event.xdata,
+                    event.ydata,
+                    system,
+                    self.traj_scatter,
+                    self.start_marker,
+                )
+            )
 
-            t, traj = compute_trajectory(system, (self.cx, self.cy))
-
-            self.traj_scatter.remove()
-            self.traj_scatter = plot_trajectory(self.main_ax, traj)
-
-            self.tser_ax.cla()
-            self.tser_ax.plot(t, traj)
-
-            self.start_marker.remove()
-            self.start_marker = plot_start_marker(self.main_ax, self.cx, self.cy)
-
-            plt.draw()
-            self.fig.canvas.draw_idle()
-
-        elif event.button == 3:  # Right click - add to manual trajectory
-            print('Adding Trajectory Point')
-            self.trajectory_points.append([event.xdata, event.ydata])
-            traj = np.array(self.trajectory_points)
-
-            # Draw trajectory segments
-            for i in range(traj.shape[0] - 1):
-                line = self.main_ax.plot(traj[i:i+2, 0], traj[i:i+2, 1], color='k')
-                add_arrow(line[0])
-
-            self.main_ax.scatter(traj[:, 0], traj[:, 1], s=200)
+            # Update state
+            self.state.update_initial_state(new_state[0], new_state[1])
 
             plt.draw()
             self.fig.canvas.draw_idle()
-            print('trajectory plot')
 
-            # Analyze dynamics along trajectory
-            if traj.shape[0] > 1:
-                dynamics = compute_trajectory_dynamics(system, traj, n_samples=40)
+        elif event.button == 3:  # Right click - manual trajectory
+            self.event_handler.handle_right_click(
+                event.xdata,
+                event.ydata,
+                system,
+                self.state.mu,
+                self.state.cfreq,
+                self.state.w,
+            )
 
-                self.tser_ax.cla()
-
-                # Plot field along trajectory
-                field_flat = dynamics['field'].swapaxes(1, 2).reshape(-1, 2, order='C')
-                self.tser_ax.plot(field_flat)
-
-                # Plot alignment
-                alignment_flat = dynamics['alignment'].reshape(-1, 1)
-                self.tser_ax.plot(alignment_flat, linestyle='--', linewidth=10)
-
-    def reset(self, event):
-        """Reset button callback."""
-        self.sfreq.reset()
-        self.samp.reset()
-
-    def set_system_type(self, label):
-        """Radio button callback to change system type."""
-        self.system_type = label
-        self.fig.canvas.draw_idle()
+            plt.draw()
+            self.fig.canvas.draw_idle()
 
     def show(self):
         """Display the interactive plot."""
         plt.show()
 
+    # ========== Compatibility properties for backward compatibility ==========
+    # These properties maintain the old API for existing tests
+
+    @property
+    def system_type(self):
+        """Get current system type (compatibility property)."""
+        return self.state.system_type
+
+    @property
+    def mu(self):
+        """Get current mu parameter (compatibility property)."""
+        return self.state.mu
+
+    @property
+    def cfreq(self):
+        """Get current cfreq parameter (compatibility property)."""
+        return self.state.cfreq
+
+    @property
+    def w(self):
+        """Get current w parameter (compatibility property)."""
+        return self.state.w
+
+    @property
+    def cx(self):
+        """Get current x initial state (compatibility property)."""
+        return self.state.cx
+
+    @property
+    def cy(self):
+        """Get current y initial state (compatibility property)."""
+        return self.state.cy
+
+    @property
+    def tidx(self):
+        """Get update counter (compatibility property)."""
+        return self.state.update_counter
+
+    @property
+    def trajectory_points(self):
+        """Get manual trajectory points (compatibility property)."""
+        return self.event_handler.manual_trajectory_points
+
+    @property
+    def sfreq(self):
+        """Get frequency slider (compatibility property)."""
+        return self.gui.sfreq
+
+    @property
+    def samp(self):
+        """Get amplitude slider (compatibility property)."""
+        return self.gui.samp
+
+    @property
+    def sw(self):
+        """Get w slider (compatibility property)."""
+        return self.gui.sw
+
+    @property
+    def button(self):
+        """Get reset button (compatibility property)."""
+        return self.gui.button
+
+    @property
+    def radio(self):
+        """Get radio buttons (compatibility property)."""
+        return self.gui.radio
+
+    def update(self, val):
+        """Update method (compatibility wrapper)."""
+        self.on_parameter_update(val)
+
+    def reset(self, event):
+        """Reset method (compatibility wrapper)."""
+        self.on_reset(event)
+
+    def set_system_type(self, label: str):
+        """Set system type method (compatibility wrapper)."""
+        self.on_system_change(label)
+
+    def on_click(self, event):
+        """Click handler method (compatibility wrapper)."""
+        self.on_mouse_click(event)
+
 
 def main():
     """Main entry point for the application."""
-    app = InteractiveFlowField()
+    app = InteractiveFFGui()
     app.show()
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()

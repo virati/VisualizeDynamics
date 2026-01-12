@@ -103,6 +103,7 @@ class InteractiveFFGui:
             update_callback=self.on_parameter_update,
             reset_callback=self.on_reset,
             system_callback=self.on_system_change,
+            apply_custom_callback=self.on_apply_custom_equations,
         )
 
         # Connect mouse events
@@ -166,7 +167,46 @@ class InteractiveFFGui:
             Selected system type
         """
         self.state.set_system_type(label)
-        self.fig.canvas.draw_idle()
+
+        # Update equation textboxes with the system's equations
+        dx_eq, dy_eq = self.state.get_system_equations(label)
+        self.gui.set_custom_equations(dx_eq, dy_eq)
+
+        # Trigger update to reflect the new system
+        self.on_parameter_update(None)
+
+    def on_apply_custom_equations(self, event):
+        """
+        Callback for Apply button (custom equations).
+
+        Parameters
+        ----------
+        event : matplotlib.backend_bases.Event
+            Button click event
+        """
+        # Get equations from GUI
+        dx_eq, dy_eq = self.gui.get_custom_equations()
+
+        print(f"Applying custom equations:")
+        print(f"  dx/dt = {dx_eq}")
+        print(f"  dy/dt = {dy_eq}")
+
+        try:
+            # Create custom system
+            self.state.create_custom_system(dx_eq, dy_eq)
+
+            # Switch to Custom system if not already
+            if self.state.system_type != 'Custom':
+                self.state.set_system_type('Custom')
+
+            # Trigger full update
+            self.on_parameter_update(None)
+
+            print("✓ Custom equations applied successfully!")
+
+        except Exception as e:
+            print(f"✗ Error applying custom equations: {e}")
+            # Could add a GUI error message here
 
     def on_mouse_click(self, event):
         """

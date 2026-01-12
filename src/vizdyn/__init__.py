@@ -6,6 +6,7 @@ from .systems import (
     SaddleNodeSystem,
     VanDerPolSystem,
     GlobalSystem,
+    CustomSystem,
 )
 from .analysis import (
     compute_trajectory,
@@ -19,6 +20,7 @@ __all__ = [
     "SaddleNodeSystem",
     "VanDerPolSystem",
     "GlobalSystem",
+    "CustomSystem",
     "compute_trajectory",
     "find_critical_points",
     "compute_flow_field",

@@ -130,6 +130,69 @@ class VanDerPolSystem(DynamicalSystem):
         return self.fc * np.array([xd, yd])
 
 
+class CustomSystem(DynamicalSystem):
+    """User-defined custom dynamical system."""
+
+    def __init__(
+        self,
+        dx_dt_func,
+        dy_dt_func,
+        mu: float = 0.0,
+        fc: float = 1.0,
+        win: float = 0.5
+    ):
+        """
+        Initialize custom system with user-defined functions.
+
+        Parameters
+        ----------
+        dx_dt_func : callable
+            Function for dx/dt that takes (x, y, mu, fc, win) and returns float
+        dy_dt_func : callable
+            Function for dy/dt that takes (x, y, mu, fc, win) and returns float
+        mu : float
+            Bifurcation parameter
+        fc : float
+            Frequency/scaling parameter
+        win : float
+            Win parameter
+        """
+        super().__init__(mu, fc, win)
+        self.dx_dt_func = dx_dt_func
+        self.dy_dt_func = dy_dt_func
+
+    def vector_field(self, state: np.ndarray, t: float) -> np.ndarray:
+        """
+        Compute vector field using user-defined functions.
+
+        Parameters
+        ----------
+        state : np.ndarray
+            Current state [x, y]
+        t : float
+            Time (for compatibility with odeint)
+
+        Returns
+        -------
+        np.ndarray
+            Derivative [dx/dt, dy/dt]
+        """
+        # Handle both single states and arrays of states
+        if state.ndim == 1:
+            x = state[0]
+            y = state[1]
+            xd = self.dx_dt_func(x, y, self.mu, self.fc, self.win)
+            yd = self.dy_dt_func(x, y, self.mu, self.fc, self.win)
+            return np.array([xd, yd])
+        else:
+            # Array of states
+            x = state[0, :]
+            y = state[1, :]
+            xd = self.dx_dt_func(x, y, self.mu, self.fc, self.win)
+            yd = self.dy_dt_func(x, y, self.mu, self.fc, self.win)
+            return np.array([xd, yd])
+
+
 # System registry for easy lookup
 SYSTEM_REGISTRY = {
     'Hopf': HopfSystem,

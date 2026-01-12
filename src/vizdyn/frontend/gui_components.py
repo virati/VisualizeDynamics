@@ -2,7 +2,7 @@
 
 import numpy as np
 import matplotlib.pyplot as plt
-from matplotlib.widgets import Slider, Button, RadioButtons
+from matplotlib.widgets import Slider, Button, RadioButtons, TextBox
 from typing import Callable, Optional, Tuple
 
 import sys
@@ -12,6 +12,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 from vizdyn.systems import get_system, DynamicalSystem
 from vizdyn.analysis import compute_trajectory, compute_trajectory_dynamics
 from vizdyn.visualization import add_arrow
+from vizdyn.equation_parser import EquationParser
 
 
 class GUIManager:
@@ -43,31 +44,16 @@ class GUIManager:
         self._create_sliders()
         self._create_buttons()
         self._create_radio_buttons()
+        self._create_equation_inputs()
 
     def _create_sliders(self):
-        """Create parameter sliders."""
-        # Frequency slider
-        axfreq = plt.axes([0.25, 0.1, 0.65, 0.03], facecolor=self.axcolor)
-        self.sfreq = Slider(
-            axfreq,
-            'CFreq',
-            0,
-            15.0,
-            valinit=self.initial_params['cfreq']
-        )
+        """Create parameter sliders in bottom left."""
+        # Sliders positioned in bottom left corner
+        slider_left = 0.05
+        slider_width = 0.35
 
-        # Mu (bifurcation parameter) slider
-        axamp = plt.axes([0.25, 0.15, 0.65, 0.03], facecolor=self.axcolor)
-        self.samp = Slider(
-            axamp,
-            'Mu',
-            -10,
-            8,
-            valinit=self.initial_params['mu']
-        )
-
-        # W factor slider
-        axw = plt.axes([0.25, 0.05, 0.65, 0.03], facecolor=self.axcolor)
+        # W factor slider (bottom)
+        axw = plt.axes([slider_left, 0.05, slider_width, 0.03], facecolor=self.axcolor)
         self.sw = Slider(
             axw,
             'W factor',
@@ -76,11 +62,30 @@ class GUIManager:
             valinit=self.initial_params['w']
         )
 
+        # Mu (bifurcation parameter) slider (middle)
+        axamp = plt.axes([slider_left, 0.10, slider_width, 0.03], facecolor=self.axcolor)
+        self.samp = Slider(
+            axamp,
+            'Mu',
+            -10,
+            8,
+            valinit=self.initial_params['mu']
+        )
+
+        # Frequency slider (top)
+        axfreq = plt.axes([slider_left, 0.15, slider_width, 0.03], facecolor=self.axcolor)
+        self.sfreq = Slider(
+            axfreq,
+            'CFreq',
+            0,
+            15.0,
+            valinit=self.initial_params['cfreq']
+        )
+
     def _create_buttons(self):
         """Create control buttons."""
-        # Note: Reset button position uses mesh_lim which should be passed
-        # For now using a default position
-        resetax = plt.axes([0.8, 0.025, 0.1, 0.04])
+        # Reset button positioned near sliders
+        resetax = plt.axes([0.05, 0.19, 0.1, 0.03])
         self.button = Button(
             resetax,
             'Reset',
@@ -93,15 +98,49 @@ class GUIManager:
         rax = plt.axes([0.025, 0.5, 0.15, 0.15], facecolor=self.axcolor)
         self.radio = RadioButtons(
             rax,
-            ('Hopf', 'VDPol', 'SN', 'global'),
+            ('Hopf', 'VDPol', 'SN', 'global', 'Custom'),
             active=0
+        )
+
+    def _create_equation_inputs(self):
+        """Create text input boxes for custom equations in bottom right."""
+        # Equation boxes positioned in bottom right corner
+        eq_left = 0.50
+        eq_width = 0.45
+
+        # dx/dt equation input (top)
+        ax_dx = plt.axes([eq_left, 0.10, eq_width, 0.03], facecolor=self.axcolor)
+        self.text_dx = TextBox(
+            ax_dx,
+            'dx/dt = ',
+            initial='win * (mu * x - y - x * (x**2 + y**2))',
+            label_pad=0.01
+        )
+
+        # dy/dt equation input (bottom) - positioned below dx/dt
+        ax_dy = plt.axes([eq_left, 0.05, eq_width, 0.03], facecolor=self.axcolor)
+        self.text_dy = TextBox(
+            ax_dy,
+            'dy/dt = ',
+            initial='(1 - win) * (x + mu * y - y * (x**2 + y**2))',
+            label_pad=0.01
+        )
+
+        # Apply button for custom equations
+        ax_apply = plt.axes([eq_left, 0.14, 0.1, 0.03])
+        self.apply_button = Button(
+            ax_apply,
+            'Apply',
+            color=self.axcolor,
+            hovercolor='0.975'
         )
 
     def connect_callbacks(
         self,
         update_callback: Callable,
         reset_callback: Callable,
-        system_callback: Callable
+        system_callback: Callable,
+        apply_custom_callback: Optional[Callable] = None
     ):
         """
         Connect callbacks to widgets.
@@ -114,12 +153,17 @@ class GUIManager:
             Callback for reset button
         system_callback : callable
             Callback for system type changes
+        apply_custom_callback : callable, optional
+            Callback for applying custom equations
         """
         self.sfreq.on_changed(update_callback)
         self.samp.on_changed(update_callback)
         self.sw.on_changed(update_callback)
         self.button.on_clicked(reset_callback)
         self.radio.on_clicked(system_callback)
+
+        if apply_custom_callback:
+            self.apply_button.on_clicked(apply_custom_callback)
 
     def get_parameter_values(self) -> dict:
         """
@@ -141,6 +185,31 @@ class GUIManager:
         self.sfreq.reset()
         self.samp.reset()
         self.sw.reset()
+
+    def get_custom_equations(self) -> Tuple[str, str]:
+        """
+        Get the current custom equation strings.
+
+        Returns
+        -------
+        tuple
+            (dx_dt_equation, dy_dt_equation)
+        """
+        return (self.text_dx.text, self.text_dy.text)
+
+    def set_custom_equations(self, dx_eq: str, dy_eq: str):
+        """
+        Set the custom equation text boxes.
+
+        Parameters
+        ----------
+        dx_eq : str
+            Equation for dx/dt
+        dy_eq : str
+            Equation for dy/dt
+        """
+        self.text_dx.set_val(dx_eq)
+        self.text_dy.set_val(dy_eq)
 
 
 class EventHandler:
@@ -340,6 +409,11 @@ class StateManager:
         self.cy = cy
         self.update_counter = 0
 
+        # Custom system state
+        self.custom_system = None
+        self.custom_dx_eq = "mu * x - y"
+        self.custom_dy_eq = "x + mu * y"
+
     def get_current_system(self) -> DynamicalSystem:
         """
         Get the current dynamical system.
@@ -349,12 +423,22 @@ class StateManager:
         DynamicalSystem
             Current system instance
         """
-        return get_system(
-            self.system_type,
-            mu=self.mu,
-            fc=self.cfreq,
-            win=self.w
-        )
+        if self.system_type == 'Custom' and self.custom_system is not None:
+            # Update parameters on custom system
+            self.custom_system.mu = self.mu
+            self.custom_system.fc = self.cfreq
+            self.custom_system.win = self.w
+            return self.custom_system
+        elif self.system_type == 'Custom':
+            # Create default custom system if not set
+            return self.create_custom_system(self.custom_dx_eq, self.custom_dy_eq)
+        else:
+            return get_system(
+                self.system_type,
+                mu=self.mu,
+                fc=self.cfreq,
+                win=self.w
+            )
 
     def update_parameters(self, mu: float, cfreq: float, w: float):
         """
@@ -409,3 +493,88 @@ class StateManager:
             (cx, cy)
         """
         return (self.cx, self.cy)
+
+    def create_custom_system(self, dx_eq: str, dy_eq: str) -> DynamicalSystem:
+        """
+        Create a custom system from equations.
+
+        Parameters
+        ----------
+        dx_eq : str
+            Equation for dx/dt
+        dy_eq : str
+            Equation for dy/dt
+
+        Returns
+        -------
+        DynamicalSystem
+            Custom system instance
+        """
+        parser = EquationParser()
+        self.custom_dx_eq = dx_eq
+        self.custom_dy_eq = dy_eq
+
+        try:
+            self.custom_system = parser.create_system_from_equations(
+                dx_eq,
+                dy_eq,
+                mu=self.mu,
+                fc=self.cfreq,
+                win=self.w
+            )
+            return self.custom_system
+        except Exception as e:
+            print(f"Error creating custom system: {e}")
+            # Fall back to Hopf system
+            self.system_type = 'Hopf'
+            return get_system('Hopf', mu=self.mu, fc=self.cfreq, win=self.w)
+
+    def get_custom_equations(self) -> Tuple[str, str]:
+        """
+        Get the current custom equations.
+
+        Returns
+        -------
+        tuple
+            (dx_dt_equation, dy_dt_equation)
+        """
+        return (self.custom_dx_eq, self.custom_dy_eq)
+
+    def get_system_equations(self, system_type: str) -> Tuple[str, str]:
+        """
+        Get the equation strings for a given system type.
+
+        Parameters
+        ----------
+        system_type : str
+            The system type name
+
+        Returns
+        -------
+        tuple
+            (dx_dt_equation, dy_dt_equation) as strings
+        """
+        # System equations including the fc scaling factor
+        equations = {
+            'Hopf': (
+                'fc * win * (mu * x - y - x * (x**2 + y**2))',
+                'fc * (1 - win) * (x + mu * y - y * (x**2 + y**2))'
+            ),
+            'VDPol': (
+                'fc * (win * mu * x - y**2 * x - y)',
+                'fc * x'
+            ),
+            'SN': (
+                'fc * (mu - x**2)',
+                'fc * (-y)'
+            ),
+            'global': (
+                'fc * y',
+                'fc * (mu * y + x - x**2 + x * y)'
+            ),
+            'Custom': (
+                self.custom_dx_eq,
+                self.custom_dy_eq
+            )
+        }
+        return equations.get(system_type, (self.custom_dx_eq, self.custom_dy_eq))

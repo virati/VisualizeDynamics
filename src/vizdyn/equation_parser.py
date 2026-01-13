@@ -10,22 +10,22 @@ class EquationParser:
 
     # Safe namespace for eval
     SAFE_NAMESPACE = {
-        'sin': np.sin,
-        'cos': np.cos,
-        'tan': np.tan,
-        'exp': np.exp,
-        'log': np.log,
-        'sqrt': np.sqrt,
-        'abs': np.abs,
-        'pi': np.pi,
-        'e': np.e,
-        'sinh': np.sinh,
-        'cosh': np.cosh,
-        'tanh': np.tanh,
-        'arcsin': np.arcsin,
-        'arccos': np.arccos,
-        'arctan': np.arctan,
-        'np': np,  # Allow numpy operations
+        "sin": np.sin,
+        "cos": np.cos,
+        "tan": np.tan,
+        "exp": np.exp,
+        "log": np.log,
+        "sqrt": np.sqrt,
+        "abs": np.abs,
+        "pi": np.pi,
+        "e": np.e,
+        "sinh": np.sinh,
+        "cosh": np.cosh,
+        "tanh": np.tanh,
+        "arcsin": np.arcsin,
+        "arccos": np.arccos,
+        "arctan": np.arctan,
+        "np": np,  # Allow numpy operations
     }
 
     @staticmethod
@@ -48,15 +48,15 @@ class EquationParser:
 
         # Check for dangerous operations
         dangerous_patterns = [
-            '__',  # Dunder methods
-            'import',
-            'exec',
-            'eval',
-            'compile',
-            'open',
-            'file',
-            'input',
-            'raw_input',
+            "__",  # Dunder methods
+            "import",
+            "exec",
+            "eval",
+            "compile",
+            "open",
+            "file",
+            "input",
+            "raw_input",
         ]
 
         equation_lower = equation.lower()
@@ -65,16 +65,18 @@ class EquationParser:
                 return False, f"Dangerous operation detected: {pattern}"
 
         # Check for valid characters (allow math operations and variables)
-        valid_pattern = re.compile(r'^[x y mu fc win \d\.\+\-\*/\(\)\^\*\s sincostaexplgrtahbfmipqu]+$')
-        if not valid_pattern.match(equation.lower().replace('np.', '')):
+        valid_pattern = re.compile(
+            r"^[x y mu fc win \d\.\+\-\*/\(\)\^\*\s sincostaexplgrtahbfmipqu]+$"
+        )
+        if not valid_pattern.match(equation.lower().replace("np.", "")):
             return False, "Equation contains invalid characters"
 
         # Try to parse as valid Python expression
         try:
             # Replace ^ with ** for exponentiation
-            test_eq = equation.replace('^', '**')
+            test_eq = equation.replace("^", "**")
             # Test compile (doesn't execute)
-            compile(test_eq, '<string>', 'eval')
+            compile(test_eq, "<string>", "eval")
         except SyntaxError as e:
             return False, f"Syntax error: {str(e)}"
 
@@ -111,14 +113,14 @@ class EquationParser:
             raise ValueError(f"Invalid equation: {error_msg}")
 
         # Replace ^ with ** for exponentiation
-        equation = equation.replace('^', '**')
+        equation = equation.replace("^", "**")
 
         # Create the function
         def equation_func(x, y, mu, fc, win):
             """Evaluate the equation with given parameters."""
             # Create local namespace with parameters
             local_ns = EquationParser.SAFE_NAMESPACE.copy()
-            local_ns.update({'x': x, 'y': y, 'mu': mu, 'fc': fc, 'win': win})
+            local_ns.update({"x": x, "y": y, "mu": mu, "fc": fc, "win": win})
 
             try:
                 result = eval(equation, {"__builtins__": {}}, local_ns)
@@ -130,11 +132,7 @@ class EquationParser:
 
     @staticmethod
     def create_system_from_equations(
-        dx_dt_eq: str,
-        dy_dt_eq: str,
-        mu: float = 0.0,
-        fc: float = 1.0,
-        win: float = 0.5
+        dx_dt_eq: str, dy_dt_eq: str, mu: float = 0.0, fc: float = 1.0, win: float = 0.5
     ):
         """
         Create a CustomSystem from equation strings.
@@ -173,11 +171,7 @@ class EquationParser:
 
         # Create and return system
         return CustomSystem(
-            dx_dt_func=dx_dt_func,
-            dy_dt_func=dy_dt_func,
-            mu=mu,
-            fc=fc,
-            win=win
+            dx_dt_func=dx_dt_func, dy_dt_func=dy_dt_func, mu=mu, fc=fc, win=win
         )
 
 

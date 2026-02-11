@@ -16,7 +16,8 @@ Refactored to separate concerns:
 import matplotlib.pyplot as plt
 
 from vizdyn.frontend.plotting import FlowFieldPlotter
-from vizdyn.frontend.gui_components import GUIManager, EventHandler, StateManager
+from vizdyn.frontend.gui_components import GUIManager, EventHandler, StateManager, ChatManager
+from vizdyn.agent import DynSysAgent
 
 
 class InteractiveFFGui:
@@ -65,20 +66,37 @@ class InteractiveFFGui:
         # Connect all callbacks
         self._connect_callbacks()
 
-    def _setup_figure(self):
-        """Setup the figure and axes layout."""
-        self.fig = plt.figure()
-
-        # Time series plot
-        self.tser_ax = plt.axes([0.05, 0.25, 0.90, 0.20], facecolor="white")
-
-        # Phase space 3D plot
-        self.phslice_ax = plt.axes(
-            [0.5, 0.50, 0.45, 0.45], facecolor="white", projection="3d"
+        # Initialize agent and chat panel
+        self.agent = DynSysAgent()
+        self.chat = ChatManager(
+            self.fig,
+            agent=self.agent,
+            context_fn=self._get_system_context,
         )
 
-        # Main 2D phase plot
-        self.main_ax = plt.axes([0.05, 0.50, 0.45, 0.45], facecolor="white")
+    def _setup_figure(self):
+        """Setup the figure and axes layout.
+
+        The bottom 0.20 of figure height is reserved for the chat strip.
+        All data axes are shifted up accordingly.
+        """
+        self.fig = plt.figure(figsize=(14, 9))
+
+        # Chat strip occupies y=[0.00, 0.20].
+        # Remaining vertical space: y=[0.20, 1.00] -> 0.80 of figure height.
+        # Original layout (before chat) used y=[0.25..0.95].
+        # We shift everything up by 0.20 so it still lives in [0.45..0.95].
+
+        # Time series plot  (was [0.05, 0.25, 0.90, 0.20])
+        self.tser_ax = plt.axes([0.05, 0.45, 0.90, 0.18], facecolor="white")
+
+        # Phase space 3D plot  (was [0.5, 0.50, 0.45, 0.45])
+        self.phslice_ax = plt.axes(
+            [0.5, 0.66, 0.45, 0.32], facecolor="white", projection="3d"
+        )
+
+        # Main 2D phase plot  (was [0.05, 0.50, 0.45, 0.45])
+        self.main_ax = plt.axes([0.05, 0.66, 0.45, 0.32], facecolor="white")
 
     def _initialize_plots(self):
         """Create initial plots using the plotter."""
@@ -252,6 +270,23 @@ class InteractiveFFGui:
 
             plt.draw()
             self.fig.canvas.draw_idle()
+
+    def _get_system_context(self) -> str:
+        """
+        Build a human-readable summary of the current system state.
+
+        Used by the chat agent as context for each query.
+        """
+        dx_eq, dy_eq = self.state.get_system_equations(self.state.system_type)
+        return (
+            f"System={self.state.system_type} | "
+            f"mu={self.state.mu:.3f} | "
+            f"cfreq={self.state.cfreq:.3f} | "
+            f"w={self.state.w:.3f} | "
+            f"initial=({self.state.cx:.2f}, {self.state.cy:.2f}) | "
+            f"dx/dt={dx_eq} | "
+            f"dy/dt={dy_eq}"
+        )
 
     def show(self):
         """Display the interactive plot."""

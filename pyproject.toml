@@ -10,6 +10,7 @@ dependencies = [
     "pyqt5>=5.15.11",
     "scikit-learn>=1.8.0",
     "scipy>=1.17.0",
+    "streamlit>=1.40.0",
 ]
 
 [project.optional-dependencies]

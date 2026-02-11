@@ -28,7 +28,9 @@ class DynSysAgent:
         "system_context:str, conversation_history:str, query:str -> response:str"
     )
 
-    def __init__(self, base_model: str = "gemini/gemini-2.5-flash", memory_size: int = 8):
+    def __init__(
+        self, base_model: str = "gemini/gemini-2.5-flash", memory_size: int = 8
+    ):
         """
         Initialize the agent.
 
@@ -41,6 +43,7 @@ class DynSysAgent:
         """
         try:
             from kiff.agents import MemoryAgent
+
             self._agent = MemoryAgent(base_model=base_model, memory_size=memory_size)
             self._available = True
             logger.info("DynSysAgent initialized successfully.")

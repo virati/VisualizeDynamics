@@ -8,13 +8,29 @@ they're looking at.
 
 from typing import Dict, Optional
 import logging
+from dspy import Signature
+import dspy
+from typing import List
 
 logger = logging.getLogger(__name__)
+
+
+class GenDynSys(Signature):
+    desired_behavior: str = dspy.InputField(
+        desc="The desired behavior of the 2D system, e.g. 'stable fixed point', 'limit cycle', 'chaotic attractor'"
+    )
+    dynamics_family: str = dspy.OutputField(
+        desc="The name of the family of the dynamical system that exhibits the desired behavior, e.g. 'Hopf bifurcation', 'Lorenz system', 'Rössler system'"
+    )
+    dynamics_equation: List[str] = dspy.OutputField(
+        desc="The equations of the system in a human-readable format, e.g. 'dx/dt = mu*x - w*y - x*(x^2 + y^2)\\ndy/dt = w*x + mu*y - y*(x^2 + y^2)'"
+    )
 
 
 class DynSysAgent:
     """
     A conversational agent that understands the current dynamical system context.
+    The main purpose of this is to *talk with the equation currently being rendered*.
 
     Wraps kiff.agents.MemoryAgent with a DSPy signature that receives:
       - The user's question

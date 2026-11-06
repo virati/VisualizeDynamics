@@ -11,7 +11,13 @@ dependencies = [
     "scikit-learn>=1.8.0",
     "scipy>=1.17.0",
     "streamlit>=1.40.0",
+    "sympy>=1.12",
+    "dysts>=0.96",
+    "autolie",
 ]
+
+[tool.uv.sources]
+autolie = { git = "https://github.com/virati/autoLie", branch = "lie-bracket-codegen" }
 
 [project.optional-dependencies]
 dev = [

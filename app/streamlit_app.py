@@ -26,6 +26,7 @@ matplotlib.use("Agg")  # headless — Streamlit owns the display
 import matplotlib.pyplot as plt
 import numpy as np
 import streamlit as st
+import streamlit.components.v1 as components
 
 from vizdyn.systems import get_system
 from vizdyn.equation_parser import EquationParser
@@ -38,6 +39,7 @@ from vizdyn.visualization import (
     plot_contour_projections,
 )
 from vizdyn.agent import DynSysAgent
+from vizdyn import gpu
 
 # ---------------------------------------------------------------------------
 # Page config
@@ -98,6 +100,12 @@ def _init_state():
         custom_dy_eq=DEFAULT_EQUATIONS["Custom"][1],
         eq_error="",
         chat_history=[],   # list of {"role": "user"|"assistant", "content": str}
+        gpu_source="Current 2-D system",
+        gpu_dysts="Lorenz",
+        gpu_f="Current 2-D system",
+        gpu_g="Rossler",
+        gpu_look="dark",
+        gpu_open="auto",
         agent=None,
     )
     for k, v in defaults.items():
@@ -148,7 +156,7 @@ def _system_context() -> str:
     stype = st.session_state.system_type
     dx = st.session_state.dx_eq
     dy = st.session_state.dy_eq
-    return (
+    context = (
         f"System={stype} | "
         f"mu={st.session_state.mu:.3f} | "
         f"cfreq={st.session_state.cfreq:.3f} | "
@@ -156,6 +164,75 @@ def _system_context() -> str:
         f"initial=({st.session_state.cx:.2f}, {st.session_state.cy:.2f}) | "
         f"dx/dt={dx} | dy/dt={dy}"
     )
+    entry = st.session_state.get("gpu_entry")
+    if entry:
+        context += " || GPU view (what the user is looking at): " + gpu.system_context(entry)
+    return context
+
+
+# ---------------------------------------------------------------------------
+# GPU view: the attractor-screensaver renderer, fed one system at a time
+# ---------------------------------------------------------------------------
+
+CURRENT = "Current 2-D system"
+
+
+@st.cache_data(show_spinner=False)
+def _dysts_names() -> list[str]:
+    return list(gpu.dysts_names())
+
+
+def _current_flow() -> gpu.Flow:
+    return gpu.equation_flow(
+        st.session_state.system_type,
+        [st.session_state.dx_eq, st.session_state.dy_eq],
+        {"mu": st.session_state.mu, "fc": st.session_state.cfreq, "win": st.session_state.w},
+        extent=MESH_LIM,
+    )
+
+
+def _flow(name: str) -> gpu.Flow:
+    return _current_flow() if name == CURRENT else gpu.dysts_flow(name)
+
+
+@st.cache_data(show_spinner=False, max_entries=64)
+def _attractor(source: str, a: str, b: str, eqs: tuple, params: tuple) -> dict:
+    """Screened, autoLie-checked renderer entry. Cached on everything it depends on."""
+    if source == "Lie bracket":
+        f, g = _flow(a), _flow(b)
+        return gpu.to_attractor(gpu.bracket_flow(f, g), parts=(f, g))
+    return gpu.to_attractor(_flow(a))
+
+
+def _gpu_entry() -> dict:
+    s = st.session_state
+    eqs = (s.system_type, s.dx_eq, s.dy_eq)
+    params = (s.mu, s.cfreq, s.w)
+    if s.gpu_source == "Lie bracket":
+        return _attractor("Lie bracket", s.gpu_f, s.gpu_g, eqs, params)
+    if s.gpu_source == "dysts flow":
+        return _attractor("single", s.gpu_dysts, "", (), ())
+    return _attractor("single", CURRENT, "", eqs, params)
+
+
+def _render_gpu_view():
+    try:
+        with st.spinner("Building the flow (autoLie → GLSL, screening)…"):
+            entry = _gpu_entry()
+    except Exception as exc:
+        st.session_state.gpu_entry = None
+        st.error(f"Could not build this flow: {exc}")
+        return
+    st.session_state.gpu_entry = entry
+    planar = entry.get("vizdyn", {}).get("planar")
+    flat = "xy" if st.session_state.gpu_open == "2-D" or (planar and st.session_state.gpu_open == "auto") else None
+    html = gpu.render_html([entry], look=st.session_state.gpu_look, flat=flat)
+    components.html(html, height=560, scrolling=False)
+    v = entry["vizdyn"]
+    note = "bounded" if v["bounded"] else "unbounded: shown near the seed"
+    if v.get("lyapunov") is not None:
+        note += f" · λ ≈ {v['lyapunov']}/crossing"
+    st.caption(f"{entry['name']} · {note} · GLSL matches autoLie to {v['autolieError']:.0e}")
 
 
 # ---------------------------------------------------------------------------
@@ -300,6 +377,37 @@ def _render_sidebar():
         if st.session_state.eq_error:
             st.error(st.session_state.eq_error)
 
+        # ── GPU view ─────────────────────────────────────────────────────
+        st.subheader("GPU view")
+        sources = [CURRENT, "dysts flow", "Lie bracket"]
+        st.session_state.gpu_source = st.radio(
+            "Render", sources, index=sources.index(st.session_state.gpu_source), key="_sb_gpu_source"
+        )
+        names = _dysts_names()
+        if st.session_state.gpu_source == "dysts flow":
+            st.session_state.gpu_dysts = st.selectbox(
+                "Flow", names, index=names.index(st.session_state.gpu_dysts), key="_sb_gpu_dysts"
+            )
+        elif st.session_state.gpu_source == "Lie bracket":
+            options = [CURRENT] + names
+            st.caption("[f, g] = (∂f/∂x) g − (∂g/∂x) f, via autoLie")
+            st.session_state.gpu_f = st.selectbox(
+                "f", options, index=options.index(st.session_state.gpu_f), key="_sb_gpu_f"
+            )
+            st.session_state.gpu_g = st.selectbox(
+                "g", options, index=options.index(st.session_state.gpu_g), key="_sb_gpu_g"
+            )
+        looks = list(gpu.LOOKS)
+        st.session_state.gpu_look = st.radio(
+            "Look", looks, index=looks.index(st.session_state.gpu_look), horizontal=True, key="_sb_gpu_look"
+        )
+        opens = ["auto", "3-D", "2-D"]
+        st.session_state.gpu_open = st.radio(
+            "Open in", opens, index=opens.index(st.session_state.gpu_open), horizontal=True,
+            key="_sb_gpu_open", help="auto: 2-D systems open flat, 3-D ones in 3-D. "
+            "Switch live with the buttons on the view (or F)."
+        )
+
         # ── Reset ────────────────────────────────────────────────────────
         st.divider()
         if st.button("Reset to defaults", use_container_width=True):
@@ -366,6 +474,12 @@ def main():
     col_plots, col_chat = st.columns([3, 2], gap="medium")
 
     with col_plots:
+        tab_gpu, tab_classic = st.tabs(["GPU view", "Phase plots"])
+
+    with tab_gpu:
+        _render_gpu_view()
+
+    with tab_classic:
         # ── Row 1: phase portrait + energy surface side by side ──────────
         sub_phase, sub_surf = st.columns(2, gap="small")
 

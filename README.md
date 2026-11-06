@@ -3,6 +3,39 @@
 ## Overview
 This is a small library to study low-dimensional dynamical systems using intuitive UI and [autoLie](https://github.com/virati/autoLie)
 
+## GPU flow viewer
+
+`uv run streamlit run app/streamlit_app.py` opens the app with a **GPU view**
+tab: the renderer from
+[attractor-screensaver](https://github.com/virati/attractor-screensaver),
+integrating a thousand trajectories on the GPU and drawing their trails.
+
+- **What it shows** (sidebar, *GPU view*): the current 2-D system, live with
+  the sliders; any 3-D [dysts](https://github.com/williamgilpin/dysts) flow;
+  or the **Lie bracket** of any two, [f, g] = (∂f/∂x) g − (∂g/∂x) f,
+  computed with [autoLie](https://github.com/virati/autoLie).
+- **3-D ⟷ 2-D:** the *3D / 2D* buttons (or `F`) warp continuously between
+  the orbiting 3-D view and a flat plot of two state axes. *x–y / x–z / y–z*
+  (or `1 2 3`) changes the plane; when flat it rises through 3-D and comes
+  back down, so you can follow which axis went where.
+- **Slicing:** *Slice* (or `S`) keeps only the trails inside a slab along the
+  third axis; drag *at* and *thickness* to sweep a cross-section through the
+  flow, in either view.
+- **Talking to it:** the chat agent's context includes the equations and
+  behaviour of whatever the GPU view is showing.
+
+Each flow goes through `vizdyn.gpu`: its right-hand side is traced to sympy,
+printed as GLSL with `autolie.symbolics.codegen`, checked against autoLie's
+autograd operators on the trajectory (the bracket against
+`lie_lib.bracket_field`), and run through the shader's own RK4 to choose a
+time step, a seed and a view. A 2-D system is lifted with z' = −z, so it
+settles into the plane and opens flat. Many brackets have no attractor (two
+constant-divergence flows bracket to a volume-preserving field); those are
+shown near the seed and labelled.
+
+The renderer sources live in `web/src`; after changing them run
+`node web/build.mjs` to rebuild `src/vizdyn/frontend/webgl/viewer.html`.
+
 ## Dynamical System Viewer
 Right now, the most complete portion of this repo is the Dynamical System Viewer (interactive_flow_field.py). Below is a quick visual overview of what this tool does.
 

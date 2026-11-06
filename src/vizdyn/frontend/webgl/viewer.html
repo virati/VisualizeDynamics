@@ -1,0 +1,3540 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Flow viewer</title>
+<style>
+  :root {
+    --bg: #000; --fg: #e8edf5; --muted: #9aa4b2; --panel: rgba(12, 14, 20, 0.72);
+    --line: rgba(255, 255, 255, 0.14); --accent: #8de2a7;
+  }
+  body.paper {
+    --fg: #1a1a1a; --muted: #5b6370; --panel: rgba(255, 255, 255, 0.82);
+    --line: rgba(0, 0, 0, 0.12); --accent: #1c51a6;
+  }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--fg); overflow: hidden;
+    font: 13px/1.4 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; }
+  canvas { position: fixed; inset: 0; width: 100%; height: 100%; display: block; cursor: grab; touch-action: none; }
+  canvas:active { cursor: grabbing; }
+  .panel { position: fixed; background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
+    padding: 8px 10px; backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px); }
+  #controls { top: 10px; left: 10px; display: flex; flex-direction: column; gap: 8px; min-width: 210px; }
+  .row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+  .seg { display: inline-flex; border: 1px solid var(--line); border-radius: 7px; overflow: hidden; }
+  .seg button { background: transparent; color: var(--fg); border: 0; padding: 4px 10px; font: inherit; cursor: pointer; }
+  .seg button + button { border-left: 1px solid var(--line); }
+  .seg button.on { background: var(--accent); color: var(--bg); }
+  body.paper .seg button.on { color: #fff; }
+  label { color: var(--muted); font-size: 12px; }
+  input[type=range] { width: 120px; accent-color: var(--accent); }
+  .val { font-variant-numeric: tabular-nums; color: var(--fg); min-width: 7ch; font-size: 12px; }
+  #info { left: 10px; bottom: 10px; max-width: min(560px, calc(100% - 40px)); }
+  #name { font-weight: 600; font-size: 14px; }
+  #eq { white-space: pre-wrap; font: 12px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--muted);
+    margin-top: 4px; max-height: 7.5em; overflow: auto; }
+  .keys { color: var(--muted); font-size: 11px; }
+  #error { position: fixed; inset: 20px; white-space: pre-wrap; color: #ff8080; font: 12px ui-monospace, monospace; display: none; }
+  #error.show { display: block; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+
+<div id="controls" class="panel">
+  <div class="row">
+    <div class="seg" id="mode"><button data-mode="3d" class="on">3D</button><button data-mode="2d">2D</button></div>
+    <div class="seg" id="plane"><button data-plane="xy" class="on">x–y</button><button data-plane="xz">x–z</button><button data-plane="yz">y–z</button></div>
+  </div>
+  <div class="row">
+    <label><input type="checkbox" id="slice"> Slice along <span id="depthAxis">z</span></label>
+  </div>
+  <div class="row"><label for="sliceAt">at</label><input type="range" id="sliceAt" min="0" max="1" step="0.001" value="0.5"><span class="val" id="sliceVal"></span></div>
+  <div class="row"><label for="sliceThick">thickness</label><input type="range" id="sliceThick" min="0.005" max="0.5" step="0.001" value="0.08"></div>
+  <div class="keys">F flat/3-D · 1 2 3 planes · S slice · drag to orbit · wheel to zoom</div>
+</div>
+
+<div id="info" class="panel">
+  <div id="name"></div>
+  <div id="eq"></div>
+</div>
+<div id="error"></div>
+
+<script>
+// Filled in by vizdyn.gpu.render_html: { systems, pinned, palette, theme, ... }.
+window.VIZDYN_CONFIG = /*CONFIG*/null;
+</script>
+<script type="module">
+const { mount } = (function () {
+
+const __mods = {};
+const __cache = {};
+function __def (name, fn) { __mods[name] = fn; }
+function __req (name) {
+  if (!__cache[name]) {
+    const exports = __cache[name] = {};
+    __mods[name](exports, __req);
+  }
+  return __cache[name];
+}
+
+__def("embed.js", function (__exports, __req) {
+// Mounts the attractor renderer into a page, rather than owning the screen.
+// Same simulation and director as the screensaver; the difference is that the
+// host page supplies the canvas, the overlay elements and the controls, and
+// the loop idles whenever nobody is looking at it.
+
+const { createContext } = __req('glutil.js');
+const { Scene } = __req('scene.js');
+const { Director } = __req('director.js');
+const { equations, parameterLine, reference } = __req('format.js');
+const { HISTORY } = __req('history.js');
+const { Drift } = __req('drift.js');
+
+function mount({
+  canvas,
+  duration = 30,
+  particles = 1024,
+  steps = 160,
+  maxPixelRatio = 1.6,
+  theme = 'dark',
+  continuous = false,
+  oled = true,
+  set = 'classic',
+  // The systems to show, in the screensaver's attractor format; `pinned` names
+  // the one to open on. Without them the named `set` is used.
+  systems = null,
+  pinned = null,
+  // Look: a palette name, a framing zoom, pinned trail settings (width, fade,
+  // tailFade, colorBy, shading, borderOpacity, borderWidth, gridOpacity,
+  // shadow) and post-processing options ({ samples, bloom, threshold }, or
+  // null to draw straight to the canvas).
+  palette = null,
+  zoom = 1,
+  trail = null,
+  post = {},
+  // Open flat on this plane (e.g. 'xy') instead of in 3-D.
+  flat = null,
+  onChange = () => {},
+  onVeil = () => {}
+}) {
+  const gl = createContext(canvas, { antialias: post === null });
+
+  const LADDER = [
+    { particles: 256, steps: 90 },
+    { particles: 512, steps: 120 },
+    { particles: 768, steps: 140 },
+    { particles, steps },
+    { particles: Math.min(2048, particles * 2), steps: Math.min(280, steps * 1.4 | 0) }
+  ];
+  let pendingRung = 3;
+  let ceilingRung = LADDER.length - 1;
+
+  const scene = new Scene(gl, { ...LADDER[3], post });
+  if (flat) {
+    scene.view.setPlane(flat);
+    scene.view.t = 1;
+    scene.view.target = 1;
+  }
+  const director = new Director(scene, {
+    duration,
+    fadeTime: 1.2,
+    theme,
+    drift: continuous ? new Drift() : null,
+    oled,
+    set,
+    systems,
+    pinned,
+    palette,
+    zoom,
+    trail,
+    quality: () => LADDER[pendingRung],
+    onChange: (attractor, style, dir) => onChange({
+      name: attractor.name,
+      equations: equations(attractor),
+      parameters: parameterLine(attractor),
+      reference: reference(attractor),
+      // Background notes, for a host page that wants to show them: `origin`,
+      // `text` (2-3 paragraphs), `sources`, and `caveat` where the attribution
+      // is shakier than the rest.
+      history: attractor.history || HISTORY[attractor.name] || null,
+      palette: style.palette.name,
+      index: dir.index,
+      total: dir.playlist.length
+    })
+  });
+
+  // --- sizing ------------------------------------------------------------
+  let pixelRatio = 1;
+  function resize() {
+    pixelRatio = Math.min(window.devicePixelRatio || 1, maxPixelRatio);
+    const w = Math.max(1, Math.round(canvas.clientWidth * pixelRatio));
+    const h = Math.max(1, Math.round(canvas.clientHeight * pixelRatio));
+    if (canvas.width !== w || canvas.height !== h) {
+      canvas.width = w;
+      canvas.height = h;
+    }
+    scene.camera.aspect = w / h;
+    if (scene.style) scene.style.pixelRatio = pixelRatio;
+  }
+  resize();
+  const ro = new ResizeObserver(resize);
+  ro.observe(canvas);
+
+  // --- loop --------------------------------------------------------------
+  let raf = 0;
+  let last = 0;
+  let accumulator = 0;
+  let smoothDt = 1 / 60;
+  let sinceCheck = 0;
+  let wanted = false;     // what the viewer asked for
+  let onScreen = true;
+  let alive = true;
+
+  function frame(now) {
+    raf = requestAnimationFrame(frame);
+    const dt = Math.min(0.1, (now - last) / 1000);
+    last = now;
+
+    if (scene.style) scene.style.pixelRatio = pixelRatio;
+
+    if (!director.paused) {
+      accumulator += dt * 60;
+      let n = Math.min(4, Math.floor(accumulator));
+      accumulator -= n;
+      while (n-- > 0) scene.sim.step(1);
+    } else {
+      accumulator = 0;
+    }
+
+    scene.camera.update(dt);
+    scene.view.advance(dt);
+    const veil = director.advance(dt);
+    scene.render({ veil });
+    onVeil(veil);
+
+    if (dt < 0.05) smoothDt += (dt - smoothDt) * 0.05;
+    sinceCheck += dt;
+    if (sinceCheck > 4) {
+      sinceCheck = 0;
+      if (smoothDt > 0.0215 && pendingRung > 0) ceilingRung = --pendingRung;
+      else if (smoothDt < 0.0125 && pendingRung < ceilingRung) pendingRung++;
+    }
+  }
+
+  function sync() {
+    const should = alive && wanted && onScreen && !document.hidden;
+    if (should && !raf) {
+      last = performance.now();
+      raf = requestAnimationFrame(frame);
+    } else if (!should && raf) {
+      cancelAnimationFrame(raf);
+      raf = 0;
+    }
+  }
+
+  const io = new IntersectionObserver(entries => {
+    onScreen = entries[entries.length - 1].isIntersecting;
+    sync();
+  }, { threshold: 0.05 });
+  io.observe(canvas);
+
+  const onVisibility = () => sync();
+  document.addEventListener('visibilitychange', onVisibility);
+
+  // --- orbit by hand -----------------------------------------------------
+  let dragging = null;
+  canvas.addEventListener('pointerdown', e => {
+    dragging = [e.clientX, e.clientY];
+    scene.camera.drag = true;
+    canvas.setPointerCapture(e.pointerId);
+  });
+  canvas.addEventListener('pointermove', e => {
+    if (!dragging) return;
+    scene.camera.orbitBy(e.clientX - dragging[0], e.clientY - dragging[1]);
+    dragging = [e.clientX, e.clientY];
+  });
+  const release = e => {
+    dragging = null;
+    scene.camera.drag = false;
+    if (canvas.hasPointerCapture?.(e.pointerId)) canvas.releasePointerCapture(e.pointerId);
+  };
+  canvas.addEventListener('pointerup', release);
+  canvas.addEventListener('pointercancel', release);
+  canvas.addEventListener('wheel', e => {
+    e.preventDefault();
+    scene.camera.zoomBy(e.deltaY);
+  }, { passive: false });
+
+  // Open on a composed frame instead of fading up from the background: the
+  // first still frame is what a thumbnail, a shared link and a reader who
+  // never scrolls all get. Transitions after this one still cross-fade.
+  director.veil = 0;
+  director.phase = 'hold';
+  scene.camera.update(0);
+  scene.render({ veil: 0 });
+  onVeil(0);
+
+  return {
+    play() { wanted = true; sync(); },
+    pause() { wanted = false; sync(); },
+    get playing() { return wanted; },
+    next() { director.jump(1); },
+    previous() { director.jump(-1); },
+    goTo(name) { director.goTo(name); },
+    reroll() { director.reshuffleLook(); },
+    hold(on) { director.paused = on; },
+    get held() { return director.paused; },
+    // --- the 2-D/3-D view ---
+    view: scene.view,
+    setFlat(on) { scene.view.setFlat(on); },
+    toggleFlat() { scene.view.toggle(); },
+    setPlane(plane) { scene.view.setPlane(plane); },
+    setSlice(opts) { scene.view.setSlice(opts); },
+    setTheme(next) {
+      if (director.theme === next) return;
+      director.theme = next;
+      director.reshuffleLook();
+    },
+    destroy() {
+      alive = false;
+      sync();
+      ro.disconnect();
+      io.disconnect();
+      document.removeEventListener('visibilitychange', onVisibility);
+      scene.destroy();
+    }
+  };
+}
+
+Object.assign(__exports, { mount });
+
+});
+
+__def("glutil.js", function (__exports, __req) {
+// Thin WebGL2 helpers: programs with cached uniform locations, float FBOs.
+
+function createContext(canvas, { antialias = true } = {}) {
+  const gl = canvas.getContext('webgl2', {
+    antialias,
+    alpha: false,
+    depth: true,
+    stencil: false,
+    premultipliedAlpha: false,
+    preserveDrawingBuffer: false,
+    powerPreference: 'high-performance',
+    desynchronized: true
+  });
+  if (!gl) throw new Error('WebGL2 is not available in this browser.');
+  if (!gl.getExtension('EXT_color_buffer_float')) {
+    throw new Error('EXT_color_buffer_float is required (float render targets).');
+  }
+  return gl;
+}
+
+function compile(gl, type, source) {
+  const sh = gl.createShader(type);
+  gl.shaderSource(sh, source);
+  gl.compileShader(sh);
+  if (!gl.getShaderParameter(sh, gl.COMPILE_STATUS)) {
+    const log = gl.getShaderInfoLog(sh);
+    const numbered = source.split('\n').map((l, i) => `${String(i + 1).padStart(3)}| ${l}`).join('\n');
+    gl.deleteShader(sh);
+    throw new Error(`Shader compile failed:\n${log}\n${numbered}`);
+  }
+  return sh;
+}
+
+function program(gl, vert, frag) {
+  const p = gl.createProgram();
+  const vs = compile(gl, gl.VERTEX_SHADER, vert);
+  const fs = compile(gl, gl.FRAGMENT_SHADER, frag);
+  gl.attachShader(p, vs);
+  gl.attachShader(p, fs);
+  gl.linkProgram(p);
+  gl.deleteShader(vs);
+  gl.deleteShader(fs);
+  if (!gl.getProgramParameter(p, gl.LINK_STATUS)) {
+    const log = gl.getProgramInfoLog(p);
+    gl.deleteProgram(p);
+    throw new Error(`Program link failed:\n${log}`);
+  }
+  const u = {};
+  const n = gl.getProgramParameter(p, gl.ACTIVE_UNIFORMS);
+  for (let i = 0; i < n; i++) {
+    const name = gl.getActiveUniform(p, i).name.replace(/\[0\]$/, '');
+    u[name] = gl.getUniformLocation(p, name);
+  }
+  return { program: p, u, destroy: () => gl.deleteProgram(p) };
+}
+
+// RGBA32F render target. NEAREST filtering; we only ever texelFetch it.
+function floatTarget(gl, width, height) {
+  const tex = gl.createTexture();
+  gl.bindTexture(gl.TEXTURE_2D, tex);
+  gl.texStorage2D(gl.TEXTURE_2D, 1, gl.RGBA32F, width, height);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+
+  const fbo = gl.createFramebuffer();
+  gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
+  gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tex, 0);
+  const status = gl.checkFramebufferStatus(gl.FRAMEBUFFER);
+  gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+  if (status !== gl.FRAMEBUFFER_COMPLETE) throw new Error(`Incomplete framebuffer: 0x${status.toString(16)}`);
+
+  return {
+    tex, fbo, width, height,
+    destroy() { gl.deleteTexture(tex); gl.deleteFramebuffer(fbo); }
+  };
+}
+
+// A single oversized triangle covering the viewport, for fullscreen passes.
+function fullscreenTriangle(gl) {
+  const vao = gl.createVertexArray();
+  const buf = gl.createBuffer();
+  gl.bindVertexArray(vao);
+  gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-4, -4, 0, 4, 4, -4]), gl.STATIC_DRAW);
+  gl.enableVertexAttribArray(0);
+  gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
+  gl.bindVertexArray(null);
+  return { vao, destroy() { gl.deleteVertexArray(vao); gl.deleteBuffer(buf); } };
+}
+
+const FULLSCREEN_VERT = `#version 300 es
+precision highp float;
+layout(location = 0) in vec2 xy;
+out vec2 uv;
+void main () {
+  uv = 0.5 * xy + 0.5;
+  gl_Position = vec4(xy, 0, 1);
+}`;
+
+function hexToRgb(hex) {
+  const h = hex.replace('#', '');
+  const v = h.length === 3 ? h.split('').map(c => c + c).join('') : h;
+  return [
+    parseInt(v.slice(0, 2), 16) / 255,
+    parseInt(v.slice(2, 4), 16) / 255,
+    parseInt(v.slice(4, 6), 16) / 255
+  ];
+}
+
+Object.assign(__exports, { createContext, program, floatTarget, fullscreenTriangle, FULLSCREEN_VERT, hexToRgb });
+
+});
+
+__def("scene.js", function (__exports, __req) {
+// Frame composition: floor smear, trails, grid room, transition veil.
+
+const { program, fullscreenTriangle, FULLSCREEN_VERT } = __req('glutil.js');
+const { Simulation } = __req('simulation.js');
+const { TrailRenderer } = __req('lines.js');
+const { Stage } = __req('stage.js');
+const { Camera } = __req('camera.js');
+const { PostFX } = __req('post.js');
+const { View } = __req('view.js');
+
+const VEIL_FRAG = `#version 300 es
+precision highp float;
+uniform vec4 uColor;
+out vec4 fragColor;
+void main () { fragColor = uColor; }`;
+
+class Scene {
+  constructor(gl, opts) {
+    this.gl = gl;
+    this.sim = new Simulation(gl, opts);
+    this.trails = new TrailRenderer(gl);
+    this.stage = new Stage(gl);
+    this.camera = new Camera();
+    this.quad = fullscreenTriangle(gl);
+    this.veil = program(gl, FULLSCREEN_VERT, VEIL_FRAG);
+    this.style = null;
+    this.view = new View();
+    // Offscreen multisampling and bloom; `post: null` draws straight to the
+    // canvas as before.
+    this.post = opts.post === null ? null : new PostFX(gl, opts.post || {});
+  }
+
+  render({ veil = 0 } = {}) {
+    const gl = this.gl;
+    const style = this.style;
+    if (!style) return;
+
+    if (this.post) this.post.begin();
+    else {
+      gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+      gl.viewport(0, 0, gl.drawingBufferWidth, gl.drawingBufferHeight);
+    }
+    gl.clearColor(style.background[0], style.background[1], style.background[2], 1);
+    gl.clearDepth(1);
+    gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+
+    // Two ways to resolve the soft edge the SDF produces.
+    //
+    // Alpha-to-coverage turns that alpha into a multisample coverage mask,
+    // which keeps the pass opaque so trails depth-test against each other with
+    // no sorting at all. The cost is that coverage has only as many levels as
+    // the buffer has samples -- four or so -- applied through a fixed dither,
+    // so every cap and joint edge is quantised and stair-steps.
+    //
+    // Blending gives the full range and a genuinely smooth edge. The cost is
+    // order: overlapping trails are composited in draw order rather than depth
+    // order, and sorting a hundred thousand segments a frame is not on. Depth
+    // testing and writing stay on, so the error is confined to the translucent
+    // edges rather than the whole stroke.
+    if (style.blend) {
+      gl.enable(gl.BLEND);
+      gl.blendFuncSeparate(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA, gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
+    } else {
+      gl.disable(gl.BLEND);
+      gl.enable(gl.SAMPLE_ALPHA_TO_COVERAGE);
+    }
+
+    // The floor shadow and the grid room belong to the 3-D view; they fade out
+    // as it flattens, and the shadow (which would sit exactly under each trail
+    // in the plot) is dropped once the warp is under way.
+    const flat = this.view.flat;
+    if (style.shadow && flat < 0.3 && this.camera.eye[1] > style.floorY) {
+      gl.disable(gl.DEPTH_TEST);
+      gl.depthMask(false);
+      this.trails.draw(this.sim, this.camera, style, { shadow: true, dither: !this.post, view: this.view });
+      gl.depthMask(true);
+    }
+
+    gl.enable(gl.DEPTH_TEST);
+    gl.depthFunc(gl.LEQUAL);
+    this.trails.draw(this.sim, this.camera, style, { shadow: false, dither: !this.post, view: this.view });
+
+    if (style.blend) gl.disable(gl.BLEND);
+    else gl.disable(gl.SAMPLE_ALPHA_TO_COVERAGE);
+
+    const grid = style.gridOpacity * (1 - flat);
+    if (grid > 0.002) this.stage.draw(this.camera, { ...style, gridOpacity: grid });
+
+    if (veil > 0.001) {
+      gl.disable(gl.DEPTH_TEST);
+      gl.enable(gl.BLEND);
+      gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+      gl.useProgram(this.veil.program);
+      gl.uniform4f(this.veil.u.uColor, style.background[0], style.background[1], style.background[2], veil);
+      gl.bindVertexArray(this.quad.vao);
+      gl.drawArrays(gl.TRIANGLES, 0, 3);
+      gl.bindVertexArray(null);
+      gl.disable(gl.BLEND);
+    }
+
+    if (this.post) this.post.end({ glow: style.palette.dark });
+  }
+
+  destroy() {
+    if (this.post) this.post.destroy();
+    this.sim.destroy();
+    this.trails.destroy();
+    this.stage.destroy();
+    this.quad.destroy();
+    this.veil.destroy();
+  }
+}
+
+Object.assign(__exports, { Scene });
+
+});
+
+__def("simulation.js", function (__exports, __req) {
+// GPU state: one RGBA32F texture holding `steps` positions for each of
+// `particles` trajectories, advanced with 4th-order Runge-Kutta.
+//
+// Layout: texel (column, row) = position of particle `row` at trail slot
+// `column`. Columns are a ring buffer; `head` is the newest sample.
+
+const { program, floatTarget, fullscreenTriangle, FULLSCREEN_VERT } = __req('glutil.js');
+
+const QUASIRANDOM = `
+// http://extremelearning.com.au/unreasonable-effectiveness-of-quasirandom-sequences/
+vec3 quasirandom (float n) {
+  const float g = 1.22074408460575947536;
+  return fract(0.5 + n * vec3(1.0 / g, 1.0 / (g * g), 1.0 / (g * g * g))).zyx;
+}
+vec3 sphericalRandom (float n) {
+  vec3 r = quasirandom(n);
+  float u = r.x * 2.0 - 1.0;
+  float theta = 6.283185307179586 * r.y;
+  return vec3(sqrt(1.0 - u * u) * vec2(cos(theta), sin(theta)), u) * sqrt(r.z);
+}`;
+
+const INIT_FRAG = `#version 300 es
+precision highp float;
+uniform vec2 uResolution;
+uniform vec3 uOrigin;
+uniform float uScale;
+out vec4 fragColor;
+${QUASIRANDOM}
+void main () {
+  // gl_FragCoord carries a half-texel offset, which is welcome here: exactly
+  // zero states tend to stick to unstable axes and fly off to infinity.
+  float particle = gl_FragCoord.y;
+  fragColor = vec4(uOrigin + uScale * sphericalRandom(particle), 1.0);
+  // A sliver of variation along each trail so there is something to see on
+  // the very first frame.
+  fragColor.z -= gl_FragCoord.x / uResolution.x * 0.001;
+}`;
+
+const COPY_FRAG = `#version 300 es
+precision highp float;
+uniform sampler2D uSrc;
+out vec4 fragColor;
+void main () {
+  fragColor = texelFetch(uSrc, ivec2(0, int(gl_FragCoord.y)), 0);
+}`;
+
+function integrateFrag(attractor) {
+  const params = attractor.params || {};
+  const names = Object.keys(params);
+  const decls = names.length ? names.map(n => `uniform float ${n};`).join('\n') : '';
+  const deriv = attractor.deriv.trim().split('\n').map(l => '    ' + l.trim()).join('\n');
+  // `respawn` (generated systems that have no bounded attractor) re-seeds a
+  // particle in the starting blob once it is this far from it, so what is on
+  // screen stays the field's behaviour near where it was seeded.
+  const glf = v => (Number.isInteger(v) ? v.toFixed(1) : String(v));
+  const respawn = attractor.respawn
+    ? `if (length(p - uOrigin) > ${glf(attractor.respawn)}) {
+      p = uOrigin + ${glf(attractor.initScale ?? 1)} * sphericalRandom(float(row) + 0.5 + t);
+      fresh = 0.0;
+    }`
+    : '';
+  return `#version 300 es
+precision highp float;
+uniform sampler2D uSrc;
+uniform float uDt, uT;
+uniform int uColumn, uSubsteps;
+uniform vec3 uOrigin;
+out vec4 fragColor;
+${decls}
+${QUASIRANDOM}
+
+vec3 derivative (float x, float y, float z, float t) {
+  return vec3(
+${deriv}
+  );
+}
+
+vec3 D (vec3 p, float t) { return derivative(p.x, p.y, p.z, t); }
+
+void main () {
+  int row = int(gl_FragCoord.y);
+  vec3 p = texelFetch(uSrc, ivec2(uColumn, row), 0).xyz;
+  float t = uT;
+  float dt = uDt;
+  // 0 marks a sample that was re-seeded rather than integrated, so the trail
+  // renderer does not draw a streak from where it was to where it restarted.
+  float fresh = 1.0;
+
+  for (int i = 0; i < uSubsteps; i++) {
+    vec3 k1 = D(p, t);
+    vec3 k2 = D(p + (0.5 * dt) * k1, t + 0.5 * dt);
+    vec3 k3 = D(p + (0.5 * dt) * k2, t + 0.5 * dt);
+    vec3 k4 = D(p + dt * k3, t + dt);
+    p += (dt / 6.0) * (k1 + k4 + 2.0 * (k2 + k3));
+    t += dt;
+
+    // Trajectories that escape get pulled back toward the origin along the
+    // same ray; ones that go non-finite are re-seeded from scratch.
+    float m = dot(p, p);
+    if (!(m < 1e12)) { p = uOrigin + sphericalRandom(float(row) + 0.5 + t); fresh = 0.0; }
+    else if (m > 1e6) { p *= 0.0001; fresh = 0.0; }
+    ${respawn}
+  }
+  fragColor = vec4(p, fresh);
+}`;
+}
+
+class Simulation {
+  constructor(gl, { particles, steps }) {
+    this.gl = gl;
+    this.particles = particles;
+    this.steps = steps;
+    this.head = 0;
+    this.t = 0;
+    this.filled = 0;
+
+    this.state = floatTarget(gl, steps, particles);
+    this.tmp = floatTarget(gl, 1, particles);
+    this.quad = fullscreenTriangle(gl);
+    this.init = program(gl, FULLSCREEN_VERT, INIT_FRAG);
+    this.copy = program(gl, FULLSCREEN_VERT, COPY_FRAG);
+    this.programs = new Map(); // attractor name -> compiled integrator
+    this.attractor = null;
+    this.params = {};
+  }
+
+  integrator(attractor) {
+    let p = this.programs.get(attractor.name);
+    if (!p) {
+      p = program(this.gl, FULLSCREEN_VERT, integrateFrag(attractor));
+      this.programs.set(attractor.name, p);
+    }
+    return p;
+  }
+
+  // Seed every trail slot with a quasirandom blob and reset the clock.
+  reset(attractor) {
+    const gl = this.gl;
+    this.attractor = attractor;
+    this.params = { ...(attractor.params || {}) };
+    this.head = 0;
+    this.t = 0;
+    this.filled = 1;
+
+    const origin = attractor.initOrigin || [0, 0, 0];
+    gl.bindFramebuffer(gl.FRAMEBUFFER, this.state.fbo);
+    gl.viewport(0, 0, this.state.width, this.state.height);
+    gl.disable(gl.DEPTH_TEST);
+    gl.disable(gl.BLEND);
+    gl.useProgram(this.init.program);
+    gl.uniform2f(this.init.u.uResolution, this.state.width, this.state.height);
+    gl.uniform3fv(this.init.u.uOrigin, origin);
+    gl.uniform1f(this.init.u.uScale, attractor.initScale ?? 1);
+    gl.bindVertexArray(this.quad.vao);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+    gl.bindVertexArray(null);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+  }
+
+  // One RK4 advance of `substeps` internal steps, appended to the ring buffer.
+  step(substeps = 1) {
+    const gl = this.gl;
+    const a = this.attractor;
+    if (!a) return;
+    const prog = this.integrator(a);
+
+    // Integrate the head column into the scratch target.
+    gl.bindFramebuffer(gl.FRAMEBUFFER, this.tmp.fbo);
+    gl.viewport(0, 0, 1, this.particles);
+    gl.disable(gl.DEPTH_TEST);
+    gl.disable(gl.BLEND);
+    gl.useProgram(prog.program);
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, this.state.tex);
+    gl.uniform1i(prog.u.uSrc, 0);
+    gl.uniform1f(prog.u.uDt, a.dt);
+    gl.uniform1f(prog.u.uT, this.t);
+    gl.uniform1i(prog.u.uColumn, this.head);
+    gl.uniform1i(prog.u.uSubsteps, substeps);
+    gl.uniform3fv(prog.u.uOrigin, a.initOrigin || [0, 0, 0]);
+    for (const [name, value] of Object.entries(this.params)) {
+      if (prog.u[name]) gl.uniform1f(prog.u[name], value);
+    }
+    gl.bindVertexArray(this.quad.vao);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+
+    this.t += a.dt * substeps;
+    this.head = (this.head + 1) % this.steps;
+    this.filled = Math.min(this.filled + 1, this.steps);
+
+    // Blit the scratch column back into the ring buffer.
+    gl.bindFramebuffer(gl.FRAMEBUFFER, this.state.fbo);
+    gl.viewport(this.head, 0, 1, this.particles);
+    gl.useProgram(this.copy.program);
+    gl.bindTexture(gl.TEXTURE_2D, this.tmp.tex);
+    gl.uniform1i(this.copy.u.uSrc, 0);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+    gl.bindVertexArray(null);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+  }
+
+  // Run the system far enough that the transient has died and the trail is
+  // full of on-attractor samples. Chunked so no single draw runs long.
+  spinUp(burnIn = 600, chunk = 24) {
+    const passes = Math.ceil(burnIn / chunk);
+    for (let i = 0; i < passes; i++) this.step(chunk);
+    for (let i = 0; i < this.steps; i++) this.step(1);
+  }
+
+  // Pull the trail buffer back to the CPU so the camera can frame the shape
+  // it actually settled into, rather than the notebook's hand-tuned guess.
+  //
+  // `maxRows` reads only the first few trajectories. The full readback is a few
+  // megabytes and costs a visible hitch, which is fine between shots but not
+  // during one; --continuous mode reframes on the move and asks for a slice.
+  readPositions(maxRows = this.particles) {
+    const gl = this.gl;
+    const rows = Math.max(1, Math.min(this.particles, Math.floor(maxRows)));
+    const out = new Float32Array(this.steps * rows * 4);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, this.state.fbo);
+    gl.readPixels(0, 0, this.steps, rows, gl.RGBA, gl.FLOAT, out);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    return out;
+  }
+
+  resize({ particles, steps }) {
+    if (particles === this.particles && steps === this.steps) return;
+    this.state.destroy();
+    this.tmp.destroy();
+    this.particles = particles;
+    this.steps = steps;
+    this.state = floatTarget(this.gl, steps, particles);
+    this.tmp = floatTarget(this.gl, 1, particles);
+  }
+
+  destroy() {
+    this.state.destroy();
+    this.tmp.destroy();
+    this.quad.destroy();
+    this.init.destroy();
+    this.copy.destroy();
+    for (const p of this.programs.values()) p.destroy();
+    this.programs.clear();
+  }
+}
+
+Object.assign(__exports, { Simulation });
+
+});
+
+__def("lines.js", function (__exports, __req) {
+// Trail renderer. Every visible segment is an instanced capsule whose corners
+// are placed in screen space by the vertex shader, so line width is in pixels
+// and independent of depth. The round ends come from an SDF the fragment shader
+// turns into alpha, resolved by alpha-to-coverage against a multisampled target
+// -- that keeps the pass opaque, so trails depth-test against each other
+// without any sorting.
+
+const { program } = __req('glutil.js');
+
+const VERT = `#version 300 es
+precision highp float;
+precision highp int;
+
+layout(location = 0) in vec2 corner;   // (0..1, 0..1)
+
+uniform mat4 uProjView, uTransform;
+uniform sampler2D uState;
+uniform ivec4 uRing;      // steps, particles, head, filled
+uniform int uSegsPerTrail, uShadow, uBlend;
+uniform vec2 uResolution; // device pixels
+uniform float uWidth, uFade, uTailFade, uColorMode, uFloorY;
+uniform vec3 uColor1, uColor2, uBackground, uShadowColor;
+// The 2-D view (see view.js). uFlat blends every point from the perspective
+// camera to an orthographic view of state axes uAxes.xy, with uAxes.z as
+// depth; in between it is a straight blend of the two screen positions, which
+// is what makes the warp continuous.
+uniform float uFlat;
+uniform ivec3 uAxes;
+uniform vec2 uFlatCenter, uFlatScale, uDepth;
+// Slab slice along state axis uAxes.z: (on, centre, half-thickness).
+uniform vec3 uSlice;
+
+out vec3 vCapsule;   // (pixels along from A, pixels across, segment length)
+out vec2 vRadius;    // radius at A and at B, pixels
+out vec4 vColor;
+out float vSlice;    // signed distance from the slice plane, in half-thicknesses
+
+vec3 quasirandom (float n) {
+  const float g = 1.22074408460575947536;
+  return fract(0.5 + n * vec3(1.0 / g, 1.0 / (g * g), 1.0 / (g * g * g))).zyx;
+}
+
+vec3 stateAt (int particle, int slot) {
+  int column = (uRing.z + 1 + slot) % uRing.x;
+  return texelFetch(uState, ivec2(column, particle), 0).xyz;
+}
+
+vec4 clipOf (vec3 s) {
+  vec4 world = uTransform * vec4(s, 1.0);
+  if (uShadow == 1) world.y = uFloorY;
+  vec4 clip = uProjView * world;
+  if (uFlat <= 0.0) return clip;
+  vec3 plane = vec3(
+    (s[uAxes.x] - uFlatCenter.x) * uFlatScale.x,
+    (s[uAxes.y] - uFlatCenter.y) * uFlatScale.y,
+    clamp(-0.45 * (s[uAxes.z] - uDepth.x) / uDepth.y, -0.95, 0.95));
+  // Behind the 3-D camera there is no screen position to blend from.
+  if (uFlat >= 1.0 || clip.w <= 0.0) return vec4(plane, 1.0);
+  return vec4(mix(clip.xyz / clip.w, plane, uFlat), 1.0);
+}
+
+float sliceOf (vec3 s) {
+  return (s[uAxes.z] - uSlice.y) / uSlice.z;
+}
+
+// The simulation writes w = 0 into a sample it had to re-seed rather than
+// integrate, so the segment arriving at it is a jump, not a piece of trail.
+bool reseeded (int particle, int slot) {
+  int column = (uRing.z + 1 + slot) % uRing.x;
+  return texelFetch(uState, ivec2(column, particle), 0).w < 0.5;
+}
+
+float widthAt (float param) {
+  return uWidth * exp(-3.0 * uFade * (1.0 - param));
+}
+
+void main () {
+  int steps = uRing.x;
+  int particle = gl_InstanceID / uSegsPerTrail;
+  int slot = gl_InstanceID - particle * uSegsPerTrail;
+
+  // Slots older than what has actually been simulated are collapsed away.
+  bool alive = slot >= steps - uRing.w;
+  if (reseeded(particle, slot + 1)) alive = false;
+
+  float denom = float(steps - 1);
+  float paramA = float(slot) / denom;
+  float paramB = float(slot + 1) / denom;
+  float pn = (float(particle) + 0.5) / float(uRing.y);
+
+  vec3 sA = stateAt(particle, slot);
+  vec3 sB = stateAt(particle, slot + 1);
+  vec4 clipA = clipOf(sA);
+  vec4 clipB = clipOf(sB);
+  // A segment entirely on one side of the slab is dropped before rasterising.
+  float slA = sliceOf(sA), slB = sliceOf(sB);
+  if (uSlice.x > 0.5 && min(slA, slB) > 1.0 || uSlice.x > 0.5 && max(slA, slB) < -1.0) alive = false;
+
+  if (!alive || clipA.w <= 0.0 || clipB.w <= 0.0) {
+    gl_Position = vec4(0.0, 0.0, 2.0, 1.0);  // behind the far plane: clipped
+    vCapsule = vec3(0.0);
+    vRadius = vec2(1.0);
+    vColor = vec4(0.0);
+    vSlice = 0.0;
+    return;
+  }
+
+  vec2 halfRes = 0.5 * uResolution;
+  vec2 pxA = (clipA.xy / clipA.w) * halfRes;
+  vec2 pxB = (clipB.xy / clipB.w) * halfRes;
+  float zA = clipA.z / clipA.w;
+  float zB = clipB.z / clipB.w;
+
+  // Each segment is a capsule: the quad runs a radius past both ends and the
+  // fragment shader rounds them off. Consecutive capsules overlap at the
+  // joint at the same depth, so a bend gets a round join with no second pass.
+  // (Joints used to be separate discs pushed just behind the segments, and
+  // wherever another trail sat at nearly the same depth it won inside the
+  // wedge, which with wide strokes read as teeth down every trail.)
+  float rA = 0.5 * widthAt(paramA);
+  float rB = 0.5 * widthAt(paramB);
+  float r = max(rA, rB);
+  vec2 d = pxB - pxA;
+  float len = length(d);
+  vec2 dir = len > 1e-5 ? d / len : vec2(1.0, 0.0);
+  vec2 nrm = vec2(-dir.y, dir.x);
+  float along = mix(-r, len + r, corner.x);
+  float across = (corner.y * 2.0 - 1.0) * r;
+  vec2 px = pxA + dir * along + nrm * across;
+  float t = len > 1e-5 ? clamp(along / len, 0.0, 1.0) : 0.0;
+  float z = mix(zA, zB, t);
+  float param = mix(paramA, paramB, t);
+  vCapsule = vec3(along, across, len);
+  vRadius = vec2(rA, rB);
+  vSlice = mix(slA, slB, t);
+
+  // Per-trail depth nudge, so trails that overlap exactly do not z-fight.
+  z -= 0.0001 * abs(pn - 0.5);
+
+  gl_Position = vec4(px / halfRes, z, 1.0);
+
+  if (uShadow == 1) {
+    vColor = vec4(uShadowColor, 1.0);
+  } else {
+    // uColorMode weighs the particle's seed radius against its index. The
+    // notebook offers the same two ends of this and nothing between; a value
+    // in between is the one thing here it cannot do.
+    float coord = mix(quasirandom(float(particle) + 0.5).z, pn, uColorMode);
+    vec3 rgb = mix(uColor1, uColor2, coord);
+    // The tail fade stays in the colour rather than moving into alpha. Carrying
+    // it in alpha reads better in theory and is what the notebook does, but the
+    // joints here are separate discs drawn under the segments, and that only
+    // hides them while the segments are opaque. A translucent stroke lets every
+    // disc show through and the trail turns into a chain of beads.
+    vColor = vec4(mix(rgb, uBackground, uTailFade * pow(1.0 - param, 0.7)), 1.0);
+  }
+}`;
+
+const FRAG = `#version 300 es
+precision highp float;
+precision highp int;
+
+in vec3 vCapsule;
+in vec2 vRadius;
+in vec4 vColor;
+in float vSlice;
+
+uniform int uShadow, uBlend;
+uniform float uShading, uDither;
+uniform vec3 uSlice;
+uniform vec2 uBorderWidth;
+uniform vec4 uBorderColor;
+
+out vec4 fragColor;
+
+float linearstep (float a, float b, float x) { return clamp((x - a) / (b - a), 0.0, 1.0); }
+
+// Interleaved gradient noise, under half a step of 8-bit colour. The tail fade
+// walks a long, low-contrast ramp into the background, and against a true-black
+// ground the dark end of that ramp has very few values left, so it bands in
+// visible rings. Dithering turns the step into noise below the eye's threshold.
+float dither (vec2 p) {
+  return fract(52.9829189 * fract(dot(p, vec2(0.06711056, 0.00583715)))) - 0.5;
+}
+
+void main () {
+  float along = vCapsule.x, across = vCapsule.y, len = vCapsule.z;
+  float r = mix(vRadius.x, vRadius.y, len > 1e-5 ? clamp(along / len, 0.0, 1.0) : 0.0);
+  float beyond = max(-along, along - len);       // > 0 inside the round ends
+  float sdf = length(vec2(max(beyond, 0.0), across)) / r;
+
+  // A pixel-wide feather, resolved by alpha-to-coverage.
+  float edge = linearstep(1.0, 1.0 - 1.0 / r, sdf) * vColor.a;
+  // Outside the slab: gone, with a short feather so the cut is not jagged.
+  if (uSlice.x > 0.5) edge *= linearstep(1.0, 0.9, abs(vSlice));
+  // Nothing invisible should reach the depth buffer and block what is behind it.
+  if (edge < 0.004) discard;
+
+  if (uShadow == 1) {
+    fragColor = vec4(vColor.rgb, edge);
+    return;
+  }
+
+  // A cheap cylindrical highlight across the width of the stroke.
+  float shade01 = across / r;
+  float highlight = 1.0 - shade01 * shade01;
+  float shade = mix(1.0, highlight, uShading);
+  shade = mix(shade, 1.0, uShading * highlight * 0.7);
+
+  vec2 threshold = 1.0 - uBorderWidth / (2.0 * r);
+  float isBorder = linearstep(threshold.x, threshold.y, sdf);
+  // Ink the sides only. A cap mostly lies over the neighbouring segment, and
+  // inked it would draw a ring across the stroke at every sample.
+  float sides = 1.0 - linearstep(0.0, 0.5 * r, beyond);
+
+  vec3 rgb = mix(vColor.rgb * shade, uBorderColor.rgb, isBorder * uBorderColor.a * sides);
+  fragColor = vec4(rgb + uDither * dither(gl_FragCoord.xy) / 255.0, edge);
+}`;
+
+class TrailRenderer {
+  constructor(gl) {
+    this.gl = gl;
+    this.prog = program(gl, VERT, FRAG);
+    this.vao = gl.createVertexArray();
+    this.buf = gl.createBuffer();
+    gl.bindVertexArray(this.vao);
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.buf);
+    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([0, 0, 0, 1, 1, 0, 1, 1]), gl.STATIC_DRAW);
+    gl.enableVertexAttribArray(0);
+    gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
+    gl.vertexAttribDivisor(0, 0);
+    gl.bindVertexArray(null);
+  }
+
+  // `dither`: off when drawing into the post-processing target, which dithers
+  // once, at the point it actually quantises to 8 bits.
+  draw(sim, camera, style, { shadow = false, dither = true, view = null } = {}) {
+    const gl = this.gl;
+    const { u, program: p } = this.prog;
+    const dpr = style.pixelRatio;
+    const width = Math.max(0.5, style.width * dpr);
+
+    gl.useProgram(p);
+    gl.bindVertexArray(this.vao);
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, sim.state.tex);
+
+    gl.uniform1i(u.uState, 0);
+    gl.uniformMatrix4fv(u.uProjView, false, camera.projView);
+    gl.uniformMatrix4fv(u.uTransform, false, style.transform);
+    gl.uniform4i(u.uRing, sim.steps, sim.particles, sim.head, sim.filled);
+    gl.uniform2f(u.uResolution, gl.drawingBufferWidth, gl.drawingBufferHeight);
+    gl.uniform1f(u.uWidth, shadow ? width * 1.05 : width);
+    gl.uniform1f(u.uFade, style.fade);
+    gl.uniform1f(u.uTailFade, shadow ? 0 : style.tailFade);
+    gl.uniform1f(u.uColorMode, style.colorBy);
+    gl.uniform1i(u.uBlend, style.blend ? 1 : 0);
+    gl.uniform1f(u.uFloorY, style.floorY);
+    gl.uniform3fv(u.uColor1, style.color1);
+    gl.uniform3fv(u.uColor2, style.color2);
+    gl.uniform3fv(u.uBackground, style.background);
+    gl.uniform3fv(u.uShadowColor, style.shadowColor);
+    gl.uniform1i(u.uShadow, shadow ? 1 : 0);
+    gl.uniform1f(u.uShading, style.shading);
+    gl.uniform1f(u.uDither, dither ? 1 : 0);
+    const v = view ? view.uniforms(gl.drawingBufferWidth / gl.drawingBufferHeight)
+      : { flat: 0, axes: [0, 1, 2], center: [0, 0], scale: [1, 1], depth: [0, 1], slice: [0, 0, 1] };
+    gl.uniform1f(u.uFlat, v.flat);
+    gl.uniform3i(u.uAxes, ...v.axes);
+    gl.uniform2fv(u.uFlatCenter, v.center);
+    gl.uniform2fv(u.uFlatScale, v.scale);
+    gl.uniform2fv(u.uDepth, v.depth);
+    gl.uniform3fv(u.uSlice, v.slice);
+    gl.uniform2f(u.uBorderWidth,
+      2.0 * style.borderWidth * dpr + 0.75,
+      2.0 * style.borderWidth * dpr - 0.75);
+    gl.uniform4f(u.uBorderColor, ...style.borderColor, style.borderOpacity);
+
+    gl.uniform1i(u.uSegsPerTrail, sim.steps - 1);
+    gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, sim.particles * (sim.steps - 1));
+
+    gl.bindVertexArray(null);
+  }
+
+  destroy() {
+    this.prog.destroy();
+    this.gl.deleteVertexArray(this.vao);
+    this.gl.deleteBuffer(this.buf);
+  }
+}
+
+Object.assign(__exports, { TrailRenderer });
+
+});
+
+__def("stage.js", function (__exports, __req) {
+// The room the attractor sits in: a box of faint grid paper, drawn only on the
+// far side of the camera so it reads as a backdrop and floor rather than a cage.
+// Ported from the notebook's "fancy axes" cell.
+
+const { program } = __req('glutil.js');
+const mat4 = __req('mat4.js');
+
+const VERT = `#version 300 es
+precision highp float;
+
+layout(location = 0) in vec3 position;
+layout(location = 1) in vec3 normal;
+layout(location = 2) in vec3 tangent;
+layout(location = 3) in vec3 bitangent;
+
+uniform mat4 uProjView, uModel;
+uniform mat3 uNormalMatrix;
+
+out vec2 vCoord;
+out vec3 vPos, vNormal;
+
+void main () {
+  vPos = (uModel * vec4(position, 1.0)).xyz;
+  vNormal = uNormalMatrix * normal;
+  vCoord = vec2(dot(position, bitangent), dot(position, tangent));
+  gl_Position = uProjView * vec4(vPos, 1.0);
+}`;
+
+const FRAG = `#version 300 es
+precision highp float;
+
+in vec2 vCoord;
+in vec3 vPos, vNormal;
+
+uniform vec3 uEye, uGridColor;
+uniform float uOpacity, uGridScale;
+
+out vec4 fragColor;
+
+float gridFactor (vec2 parameter, float width) {
+  vec2 d = fwidth(parameter);
+  vec2 looped = 0.5 - abs(mod(parameter, 1.0) - 0.5);
+  vec2 a2 = smoothstep(d * (width + 0.5), d * (width - 0.5), looped);
+  return max(a2.x, a2.y);
+}
+
+void main () {
+  vec3 n = normalize(vNormal);
+  float vDotN = dot(normalize(vPos - uEye), n);
+
+  // Only the walls behind the subject; the ones between us and it are dropped.
+  if (vDotN < 0.0) discard;
+
+  float fade = smoothstep(0.02, 0.25, vDotN);
+  // Cell size stays fixed in world units however large the room gets.
+  float alpha = fade * uOpacity * (
+    gridFactor(vCoord * 4.0 * uGridScale, 0.5) +
+    0.2 * gridFactor(vCoord * 40.0 * uGridScale, 0.5)
+  );
+  if (alpha < 0.002) discard;
+  fragColor = vec4(uGridColor, alpha);
+}`;
+
+function boxGeometry() {
+  const position = [], normal = [], tangent = [], bitangent = [], index = [];
+  const basis = [
+    [1, 0, 0],
+    [0, 1, 0],
+    [0, 0, 1]
+  ];
+  for (let axis = 0; axis < 3; axis++) {
+    const n = basis[axis];
+    const t = basis[(axis + 1) % 3];
+    const b = basis[(axis + 2) % 3];
+    for (const sign of [1, -1]) {
+      const base = position.length / 3;
+      for (const [su, sv] of [[-1, -1], [1, -1], [1, 1], [-1, 1]]) {
+        position.push(
+          sign * n[0] + su * t[0] + sv * b[0],
+          sign * n[1] + su * t[1] + sv * b[1],
+          sign * n[2] + su * t[2] + sv * b[2]
+        );
+        normal.push(sign * n[0], sign * n[1], sign * n[2]);
+        tangent.push(...t);
+        bitangent.push(...b);
+      }
+      index.push(base, base + 1, base + 2, base, base + 2, base + 3);
+    }
+  }
+  return { position, normal, tangent, bitangent, index };
+}
+
+class Stage {
+  constructor(gl) {
+    this.gl = gl;
+    this.prog = program(gl, VERT, FRAG);
+
+    const g = boxGeometry();
+    this.count = g.index.length;
+    this.vao = gl.createVertexArray();
+    gl.bindVertexArray(this.vao);
+    this.buffers = [];
+    [g.position, g.normal, g.tangent, g.bitangent].forEach((data, loc) => {
+      const buf = gl.createBuffer();
+      gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+      gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(data), gl.STATIC_DRAW);
+      gl.enableVertexAttribArray(loc);
+      gl.vertexAttribPointer(loc, 3, gl.FLOAT, false, 0, 0);
+      this.buffers.push(buf);
+    });
+    this.ibo = gl.createBuffer();
+    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, this.ibo);
+    gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, new Uint16Array(g.index), gl.STATIC_DRAW);
+    gl.bindVertexArray(null);
+
+    this.model = mat4.create();
+    this.normalMatrix = new Float32Array(9);
+    this.shaped = null;
+  }
+
+  // A cube of half-extent `half` whose underside rests on `floorY`.
+  shape(half, floorY) {
+    const key = `${half}:${floorY}`;
+    if (this.shaped === key) return;
+    this.shaped = key;
+    mat4.scale(this.model, mat4.fromTranslation(mat4.create(), [0, floorY + half, 0]), [half, half, half]);
+    mat4.normalFromMat4(this.normalMatrix, this.model);
+  }
+
+  draw(camera, style) {
+    const gl = this.gl;
+    const { u, program: p } = this.prog;
+    this.shape(style.roomHalf, style.floorY);
+    gl.useProgram(p);
+    gl.bindVertexArray(this.vao);
+    gl.uniformMatrix4fv(u.uProjView, false, camera.projView);
+    gl.uniformMatrix4fv(u.uModel, false, this.model);
+    gl.uniformMatrix3fv(u.uNormalMatrix, false, this.normalMatrix);
+    gl.uniform3fv(u.uEye, camera.eye);
+    gl.uniform3fv(u.uGridColor, style.gridColor);
+    gl.uniform1f(u.uOpacity, style.gridOpacity);
+    gl.uniform1f(u.uGridScale, style.roomHalf / 2);
+
+    gl.enable(gl.BLEND);
+    gl.blendFuncSeparate(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA, gl.ONE, gl.ONE);
+    gl.depthMask(false);
+    gl.drawElements(gl.TRIANGLES, this.count, gl.UNSIGNED_SHORT, 0);
+    gl.depthMask(true);
+    gl.disable(gl.BLEND);
+    gl.bindVertexArray(null);
+  }
+
+  destroy() {
+    this.prog.destroy();
+    this.gl.deleteVertexArray(this.vao);
+    this.buffers.forEach(b => this.gl.deleteBuffer(b));
+    this.gl.deleteBuffer(this.ibo);
+  }
+}
+
+Object.assign(__exports, { Stage });
+
+});
+
+__def("mat4.js", function (__exports, __req) {
+// Minimal column-major 4x4 / 3x3 matrix helpers (gl-matrix subset).
+
+const create = () => new Float32Array([1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1]);
+
+function identity(o) {
+  o[0]=1;o[1]=0;o[2]=0;o[3]=0; o[4]=0;o[5]=1;o[6]=0;o[7]=0;
+  o[8]=0;o[9]=0;o[10]=1;o[11]=0; o[12]=0;o[13]=0;o[14]=0;o[15]=1;
+  return o;
+}
+
+function multiply(o, a, b) {
+  const a00=a[0],a01=a[1],a02=a[2],a03=a[3],a10=a[4],a11=a[5],a12=a[6],a13=a[7],
+        a20=a[8],a21=a[9],a22=a[10],a23=a[11],a30=a[12],a31=a[13],a32=a[14],a33=a[15];
+  for (let i = 0; i < 4; i++) {
+    const b0=b[i*4],b1=b[i*4+1],b2=b[i*4+2],b3=b[i*4+3];
+    o[i*4]   = b0*a00 + b1*a10 + b2*a20 + b3*a30;
+    o[i*4+1] = b0*a01 + b1*a11 + b2*a21 + b3*a31;
+    o[i*4+2] = b0*a02 + b1*a12 + b2*a22 + b3*a32;
+    o[i*4+3] = b0*a03 + b1*a13 + b2*a23 + b3*a33;
+  }
+  return o;
+}
+
+function translate(o, a, v) {
+  const [x,y,z] = v;
+  if (o !== a) o.set(a);
+  o[12] = a[0]*x + a[4]*y + a[8]*z + a[12];
+  o[13] = a[1]*x + a[5]*y + a[9]*z + a[13];
+  o[14] = a[2]*x + a[6]*y + a[10]*z + a[14];
+  o[15] = a[3]*x + a[7]*y + a[11]*z + a[15];
+  return o;
+}
+
+function scale(o, a, v) {
+  const [x,y,z] = v;
+  for (let i = 0; i < 4; i++) { o[i]=a[i]*x; o[4+i]=a[4+i]*y; o[8+i]=a[8+i]*z; o[12+i]=a[12+i]; }
+  return o;
+}
+
+function rotateAxis(o, a, rad, axis) {
+  const s = Math.sin(rad), c = Math.cos(rad);
+  // columns to mix: (1,2) for X, (2,0) for Y, (0,1) for Z
+  const [p, q] = axis === 0 ? [1,2] : axis === 1 ? [2,0] : [0,1];
+  const P = [a[p*4],a[p*4+1],a[p*4+2],a[p*4+3]];
+  const Q = [a[q*4],a[q*4+1],a[q*4+2],a[q*4+3]];
+  if (o !== a) o.set(a);
+  for (let i = 0; i < 4; i++) {
+    o[p*4+i] = P[i]*c + Q[i]*s;
+    o[q*4+i] = Q[i]*c - P[i]*s;
+  }
+  return o;
+}
+
+const rotateX = (o,a,r) => rotateAxis(o,a,r,0);
+const rotateY = (o,a,r) => rotateAxis(o,a,r,1);
+const rotateZ = (o,a,r) => rotateAxis(o,a,r,2);
+
+function fromTranslation(o, v) { identity(o); o[12]=v[0]; o[13]=v[1]; o[14]=v[2]; return o; }
+
+function invert(o, a) {
+  const [a00,a01,a02,a03,a10,a11,a12,a13,a20,a21,a22,a23,a30,a31,a32,a33] = a;
+  const b00=a00*a11-a01*a10, b01=a00*a12-a02*a10, b02=a00*a13-a03*a10,
+        b03=a01*a12-a02*a11, b04=a01*a13-a03*a11, b05=a02*a13-a03*a12,
+        b06=a20*a31-a21*a30, b07=a20*a32-a22*a30, b08=a20*a33-a23*a30,
+        b09=a21*a32-a22*a31, b10=a21*a33-a23*a31, b11=a22*a33-a23*a32;
+  let det = b00*b11 - b01*b10 + b02*b09 + b03*b08 - b04*b07 + b05*b06;
+  if (!det) return null;
+  det = 1.0 / det;
+  o[0]=(a11*b11-a12*b10+a13*b09)*det;  o[1]=(a02*b10-a01*b11-a03*b09)*det;
+  o[2]=(a31*b05-a32*b04+a33*b03)*det;  o[3]=(a22*b04-a21*b05-a23*b03)*det;
+  o[4]=(a12*b08-a10*b11-a13*b07)*det;  o[5]=(a00*b11-a02*b08+a03*b07)*det;
+  o[6]=(a32*b02-a30*b05-a33*b01)*det;  o[7]=(a20*b05-a22*b02+a23*b01)*det;
+  o[8]=(a10*b10-a11*b08+a13*b06)*det;  o[9]=(a01*b08-a00*b10-a03*b06)*det;
+  o[10]=(a30*b04-a31*b02+a33*b00)*det; o[11]=(a21*b02-a20*b04-a23*b00)*det;
+  o[12]=(a11*b07-a10*b09-a12*b06)*det; o[13]=(a00*b09-a01*b07+a02*b06)*det;
+  o[14]=(a31*b01-a30*b03-a32*b00)*det; o[15]=(a20*b03-a21*b01+a22*b00)*det;
+  return o;
+}
+
+function perspective(o, fovy, aspect, near, far) {
+  const f = 1.0 / Math.tan(fovy / 2);
+  o.fill(0);
+  o[0] = f / aspect; o[5] = f; o[11] = -1;
+  o[10] = (far + near) / (near - far);
+  o[14] = (2 * far * near) / (near - far);
+  return o;
+}
+
+function lookAt(o, eye, center, up) {
+  let z0=eye[0]-center[0], z1=eye[1]-center[1], z2=eye[2]-center[2];
+  let len = 1 / Math.hypot(z0, z1, z2);
+  z0*=len; z1*=len; z2*=len;
+  let x0 = up[1]*z2 - up[2]*z1, x1 = up[2]*z0 - up[0]*z2, x2 = up[0]*z1 - up[1]*z0;
+  len = Math.hypot(x0, x1, x2);
+  if (!len) { x0 = x1 = x2 = 0; } else { len = 1/len; x0*=len; x1*=len; x2*=len; }
+  const y0 = z1*x2 - z2*x1, y1 = z2*x0 - z0*x2, y2 = z0*x1 - z1*x0;
+  o[0]=x0; o[1]=y0; o[2]=z0; o[3]=0;
+  o[4]=x1; o[5]=y1; o[6]=z1; o[7]=0;
+  o[8]=x2; o[9]=y2; o[10]=z2; o[11]=0;
+  o[12]=-(x0*eye[0]+x1*eye[1]+x2*eye[2]);
+  o[13]=-(y0*eye[0]+y1*eye[1]+y2*eye[2]);
+  o[14]=-(z0*eye[0]+z1*eye[1]+z2*eye[2]);
+  o[15]=1;
+  return o;
+}
+
+// Upper-left 3x3 inverse-transpose, as a mat3 (9 floats).
+function normalFromMat4(o, a) {
+  const inv = invert(create(), a);
+  if (!inv) return null;
+  o[0]=inv[0]; o[1]=inv[4]; o[2]=inv[8];
+  o[3]=inv[1]; o[4]=inv[5]; o[5]=inv[9];
+  o[6]=inv[2]; o[7]=inv[6]; o[8]=inv[10];
+  return o;
+}
+
+// The notebook's `createTransform`: maps attractor coordinates into a unit-ish
+// box centred at y = 0.5, sitting on the floor plane at y = -0.5.
+function viewTransform({ center = [0,0,0], size = [1,1,1], rotation = [0,0,0] } = {}) {
+  const m = create();
+  translate(m, m, center);
+  scale(m, m, size);
+  rotateX(m, m, rotation[0]);
+  rotateY(m, m, rotation[1]);
+  rotateZ(m, m, rotation[2]);
+  invert(m, m);
+  return multiply(m, fromTranslation(create(), [0, 0.5, 0]), m);
+}
+
+Object.assign(__exports, { create, identity, multiply, translate, scale, rotateX, rotateY, rotateZ, fromTranslation, invert, perspective, lookAt, normalFromMat4, viewTransform });
+
+});
+
+__def("camera.js", function (__exports, __req) {
+// Orbit camera with a slow, never-quite-repeating drift.
+
+const mat4 = __req('mat4.js');
+
+class Camera {
+  constructor() {
+    this.target = [0, 0.5, 0];
+    this.distance = 3.2;
+    this.theta = 0.9;       // azimuth
+    this.phi = 0.32;        // elevation, radians above the horizon
+    this.fov = Math.PI / 4;
+    this.aspect = 1;
+
+    this.dTheta = 0.0022;   // radians per frame at 60fps
+    this.phiCenter = 0.32;
+    this.phiSwing = 0.22;
+    this.phiRate = 0.11;
+    this.clock = 0;
+
+    this.eye = new Float32Array(3);
+    this.view = mat4.create();
+    this.projection = mat4.create();
+    this.projView = mat4.create();
+    this.drag = null;
+  }
+
+  // Randomise the vantage point without ever ducking under the floor.
+  randomize(rng = Math.random) {
+    this.theta = rng() * Math.PI * 2;
+    this.phiCenter = 0.12 + rng() * 0.5;
+    this.phiSwing = 0.06 + rng() * 0.22;
+    this.phiRate = 0.06 + rng() * 0.12;
+    this.dTheta = (rng() < 0.5 ? -1 : 1) * (0.0012 + rng() * 0.0022);
+    this.distance = 2.9 + rng() * 0.9;
+    this.clock = rng() * 100;
+  }
+
+  update(dt) {
+    this.clock += dt;
+    if (!this.drag) {
+      this.theta += this.dTheta * dt * 60;
+      this.phi = this.phiCenter + this.phiSwing * Math.sin(this.clock * this.phiRate);
+    }
+    this.phi = Math.max(-0.45, Math.min(1.45, this.phi));
+
+    const cp = Math.cos(this.phi), sp = Math.sin(this.phi);
+    this.eye[0] = this.target[0] + this.distance * cp * Math.cos(this.theta);
+    this.eye[1] = this.target[1] + this.distance * sp;
+    this.eye[2] = this.target[2] + this.distance * cp * Math.sin(this.theta);
+
+    mat4.perspective(this.projection, this.fov, this.aspect, 0.05, 60);
+    mat4.lookAt(this.view, this.eye, this.target, [0, 1, 0]);
+    mat4.multiply(this.projView, this.projection, this.view);
+  }
+
+  // Back off far enough that a sphere of `radius` about the target fits the
+  // narrower of the two field-of-view angles, with room to breathe.
+  frameRadius(radius, margin = 1.35) {
+    const vertical = this.fov / 2;
+    const horizontal = Math.atan(Math.tan(vertical) * this.aspect);
+    const half = Math.min(vertical, horizontal);
+    // The floor of 0.6 keeps the eye outside the near plane of most shapes even
+    // when a zoomed-in look frames from inside the attractor.
+    this.distance = Math.max(0.6, Math.min(9, (radius / Math.sin(half)) * margin));
+  }
+
+  orbitBy(dx, dy) {
+    this.theta -= dx * 0.005;
+    this.phiCenter = Math.max(-0.4, Math.min(1.4, this.phiCenter - dy * 0.005));
+    this.phi = this.phiCenter;
+  }
+
+  zoomBy(delta) {
+    this.distance = Math.max(0.8, Math.min(12, this.distance * Math.exp(delta * 0.0012)));
+  }
+}
+
+Object.assign(__exports, { Camera });
+
+});
+
+__def("post.js", function (__exports, __req) {
+// Post-processing: the scene is drawn into an offscreen multisample target,
+// resolved, given a bloom, and composited onto the canvas.
+//
+// The multisample target is the antialiasing. Trails resolve their soft edge
+// with alpha-to-coverage, and coverage has only as many levels as the buffer
+// has samples. The canvas's own buffer gets whatever the browser picks, usually
+// four; an offscreen renderbuffer can ask for the GPU's maximum, typically 8 or
+// 16, which is two to four times the edge resolution with the pass still
+// opaque and still depth-sorted for free. It is also half-float, so the dark
+// end of a tail fade is not already quantised to 8 bits before the bloom and
+// the final dither see it.
+//
+// The bloom is the usual mip chain (Jimenez, "Next Generation Post Processing
+// in Call of Duty: Advanced Warfare", 2014): a soft-thresholded prefilter at
+// half resolution, a 13-tap downsample to each smaller level, then a tent
+// upsample added back up the chain. It is skipped on light palettes, where a
+// glow only greys out the paper.
+
+const { program, fullscreenTriangle, FULLSCREEN_VERT } = __req('glutil.js');
+
+const HEADER = `#version 300 es
+precision highp float;
+in vec2 uv;
+out vec4 fragColor;
+uniform sampler2D uSrc;
+uniform vec2 uTexel;   // 1 / source size
+`;
+
+// Luminance above uThreshold passes, with a quadratic knee below it so the
+// cut-off is not a visible edge on a gradient.
+const PREFILTER = HEADER + `
+uniform float uThreshold, uKnee;
+void main () {
+  vec3 c = texture(uSrc, uv).rgb;
+  float l = max(c.r, max(c.g, c.b));
+  float soft = clamp(l - uThreshold + uKnee, 0.0, 2.0 * uKnee);
+  soft = soft * soft / (4.0 * uKnee + 1e-4);
+  float w = max(soft, l - uThreshold) / max(l, 1e-4);
+  fragColor = vec4(c * w, 1.0);
+}`;
+
+const DOWN = HEADER + `
+vec3 at (vec2 o) { return texture(uSrc, uv + o * uTexel).rgb; }
+void main () {
+  vec3 a = at(vec2(-2, 2)), b = at(vec2(0, 2)), c = at(vec2(2, 2));
+  vec3 d = at(vec2(-2, 0)), e = at(vec2(0, 0)), f = at(vec2(2, 0));
+  vec3 g = at(vec2(-2, -2)), h = at(vec2(0, -2)), i = at(vec2(2, -2));
+  vec3 j = at(vec2(-1, 1)), k = at(vec2(1, 1)), l = at(vec2(-1, -1)), m = at(vec2(1, -1));
+  vec3 s = e * 0.125 + (a + c + g + i) * 0.03125 + (b + d + f + h) * 0.0625 + (j + k + l + m) * 0.125;
+  fragColor = vec4(s, 1.0);
+}`;
+
+const UP = HEADER + `
+uniform float uRadius;
+vec3 at (vec2 o) { return texture(uSrc, uv + o * uTexel * uRadius).rgb; }
+void main () {
+  vec3 s = at(vec2(0, 0)) * 4.0
+    + (at(vec2(-1, 0)) + at(vec2(1, 0)) + at(vec2(0, -1)) + at(vec2(0, 1))) * 2.0
+    + at(vec2(-1, -1)) + at(vec2(1, -1)) + at(vec2(-1, 1)) + at(vec2(1, 1));
+  fragColor = vec4(s / 16.0, 1.0);
+}`;
+
+const COMPOSITE = HEADER + `
+uniform sampler2D uBloom;
+uniform float uStrength;
+// Interleaved gradient noise, under half a step of 8-bit colour: this is the
+// pass that finally quantises to the canvas, so it is the one that dithers.
+float dither (vec2 p) {
+  return fract(52.9829189 * fract(dot(p, vec2(0.06711056, 0.00583715)))) - 0.5;
+}
+void main () {
+  vec3 c = texture(uSrc, uv).rgb + uStrength * texture(uBloom, uv).rgb;
+  fragColor = vec4(c + dither(gl_FragCoord.xy) / 255.0, 1.0);
+}`;
+
+function texture(gl, w, h) {
+  const tex = gl.createTexture();
+  gl.bindTexture(gl.TEXTURE_2D, tex);
+  gl.texStorage2D(gl.TEXTURE_2D, 1, gl.RGBA16F, w, h);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+  const fbo = gl.createFramebuffer();
+  gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
+  gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tex, 0);
+  return { tex, fbo, w, h, destroy() { gl.deleteTexture(tex); gl.deleteFramebuffer(fbo); } };
+}
+
+class PostFX {
+  // `samples`: multisample count, clamped to what the GPU allows (0 = its max).
+  // `bloom`: strength, 0 for none. `threshold`: brightness where glow starts.
+  constructor(gl, { samples = 0, bloom = 0.55, threshold = 0.3, radius = 1, levels = 6 } = {}) {
+    this.gl = gl;
+    const max = gl.getParameter(gl.MAX_SAMPLES);
+    this.samples = Math.max(1, Math.min(max, samples > 0 ? samples : max));
+    this.bloom = bloom;
+    this.threshold = threshold;
+    this.radius = radius;
+    this.levels = levels;
+    this.quad = fullscreenTriangle(gl);
+    this.prefilter = program(gl, FULLSCREEN_VERT, PREFILTER);
+    this.down = program(gl, FULLSCREEN_VERT, DOWN);
+    this.up = program(gl, FULLSCREEN_VERT, UP);
+    this.composite = program(gl, FULLSCREEN_VERT, COMPOSITE);
+    this.width = 0;
+    this.height = 0;
+    this.targets = null;
+  }
+
+  allocate(w, h) {
+    const gl = this.gl;
+    this.release();
+    const color = gl.createRenderbuffer();
+    gl.bindRenderbuffer(gl.RENDERBUFFER, color);
+    gl.renderbufferStorageMultisample(gl.RENDERBUFFER, this.samples, gl.RGBA16F, w, h);
+    const depth = gl.createRenderbuffer();
+    gl.bindRenderbuffer(gl.RENDERBUFFER, depth);
+    gl.renderbufferStorageMultisample(gl.RENDERBUFFER, this.samples, gl.DEPTH_COMPONENT24, w, h);
+    const msaa = gl.createFramebuffer();
+    gl.bindFramebuffer(gl.FRAMEBUFFER, msaa);
+    gl.framebufferRenderbuffer(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.RENDERBUFFER, color);
+    gl.framebufferRenderbuffer(gl.FRAMEBUFFER, gl.DEPTH_ATTACHMENT, gl.RENDERBUFFER, depth);
+    const status = gl.checkFramebufferStatus(gl.FRAMEBUFFER);
+    if (status !== gl.FRAMEBUFFER_COMPLETE) throw new Error(`Incomplete MSAA framebuffer: 0x${status.toString(16)}`);
+
+    const resolved = texture(gl, w, h);
+    const chain = [];
+    let cw = w, ch = h;
+    for (let i = 0; i < this.levels; i++) {
+      cw = Math.max(1, cw >> 1);
+      ch = Math.max(1, ch >> 1);
+      chain.push(texture(gl, cw, ch));
+      if (cw === 1 && ch === 1) break;
+    }
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    this.targets = { color, depth, msaa, resolved, chain };
+    this.width = w;
+    this.height = h;
+  }
+
+  release() {
+    const t = this.targets;
+    if (!t) return;
+    const gl = this.gl;
+    gl.deleteRenderbuffer(t.color);
+    gl.deleteRenderbuffer(t.depth);
+    gl.deleteFramebuffer(t.msaa);
+    t.resolved.destroy();
+    for (const c of t.chain) c.destroy();
+    this.targets = null;
+  }
+
+  // Bind the multisample target; the scene draws into it as if it were the canvas.
+  begin() {
+    const gl = this.gl;
+    const w = gl.drawingBufferWidth, h = gl.drawingBufferHeight;
+    if (w !== this.width || h !== this.height || !this.targets) this.allocate(w, h);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, this.targets.msaa);
+    gl.viewport(0, 0, w, h);
+  }
+
+  pass(prog, src, dst, uniforms = {}) {
+    const gl = this.gl;
+    gl.bindFramebuffer(gl.FRAMEBUFFER, dst ? dst.fbo : null);
+    gl.viewport(0, 0, dst ? dst.w : this.width, dst ? dst.h : this.height);
+    gl.useProgram(prog.program);
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, src.tex);
+    gl.uniform1i(prog.u.uSrc, 0);
+    gl.uniform2f(prog.u.uTexel, 1 / src.w, 1 / src.h);
+    for (const [k, v] of Object.entries(uniforms)) if (prog.u[k]) gl.uniform1f(prog.u[k], v);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+  }
+
+  // Resolve, bloom, and composite onto the canvas.
+  end({ glow = true } = {}) {
+    const gl = this.gl;
+    const { msaa, resolved, chain } = this.targets;
+    const w = this.width, h = this.height;
+
+    gl.disable(gl.DEPTH_TEST);
+    gl.disable(gl.BLEND);
+    gl.disable(gl.SAMPLE_ALPHA_TO_COVERAGE);
+
+    gl.bindFramebuffer(gl.READ_FRAMEBUFFER, msaa);
+    gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, resolved.fbo);
+    gl.blitFramebuffer(0, 0, w, h, 0, 0, w, h, gl.COLOR_BUFFER_BIT, gl.NEAREST);
+    gl.bindFramebuffer(gl.READ_FRAMEBUFFER, null);
+    gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, null);
+
+    gl.bindVertexArray(this.quad.vao);
+    const strength = glow ? this.bloom : 0;
+    if (strength > 0) {
+      this.pass(this.prefilter, resolved, chain[0],
+        { uThreshold: this.threshold, uKnee: Math.max(0.05, this.threshold * 0.5) });
+      for (let i = 1; i < chain.length; i++) this.pass(this.down, chain[i - 1], chain[i]);
+      gl.enable(gl.BLEND);
+      gl.blendFunc(gl.ONE, gl.ONE);
+      for (let i = chain.length - 1; i > 0; i--) {
+        this.pass(this.up, chain[i], chain[i - 1], { uRadius: this.radius });
+      }
+      gl.disable(gl.BLEND);
+    }
+
+    gl.useProgram(this.composite.program);
+    gl.activeTexture(gl.TEXTURE1);
+    gl.bindTexture(gl.TEXTURE_2D, chain[0].tex);
+    gl.uniform1i(this.composite.u.uBloom, 1);
+    // Each level was added in at full weight on the way up; divide that back out.
+    this.pass(this.composite, resolved, null, { uStrength: strength / chain.length });
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindVertexArray(null);
+  }
+
+  destroy() {
+    this.release();
+    this.quad.destroy();
+    for (const p of [this.prefilter, this.down, this.up, this.composite]) p.destroy();
+  }
+}
+
+Object.assign(__exports, { PostFX });
+
+});
+
+__def("view.js", function (__exports, __req) {
+// The 2-D/3-D view: how far the picture is warped from the orbiting 3-D camera
+// onto a flat, orthographic plot of two state axes, and where the slab slice
+// sits along the third.
+//
+// Everything here animates, because the point is that the two views are the
+// same object: going flat is a continuous blend of every point's screen
+// position, and changing plane while flat goes up through 3-D and back down,
+// so the eye can follow which axis went where.
+
+const AXES = { x: 0, y: 1, z: 2 };
+const NAMES = ['x', 'y', 'z'];
+
+const smooth = t => t * t * (3 - 2 * t);
+
+class View {
+  constructor({ duration = 1.1 } = {}) {
+    this.duration = duration;
+    this.t = 0;              // linear progress toward flat, 0..1
+    this.target = 0;
+    this.axes = [0, 1, 2];   // plot horizontal, plot vertical, depth/slice
+    this.pending = null;     // axes to switch to once back in 3-D
+    this.slice = { on: false, at: 0.5, thickness: 0.08 };  // fractions of the depth axis's range
+    this.bounds = { center: [0, 0, 0], half: [1, 1, 1] };
+    this.margin = 0.86;
+  }
+
+  get flat() { return smooth(this.t); }
+
+  // Fit the plot to where the trajectories actually are: 2-98th percentiles
+  // per state axis, from the same readback the director frames the camera with.
+  measure(positions) {
+    const count = positions.length / 4;
+    const stride = Math.max(1, Math.ceil(count / 20000));
+    const cols = [[], [], []];
+    for (let i = 0; i < count; i += stride) {
+      const x = positions[i * 4], y = positions[i * 4 + 1], z = positions[i * 4 + 2];
+      if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z)) continue;
+      cols[0].push(x); cols[1].push(y); cols[2].push(z);
+    }
+    if (!cols[0].length) return;
+    const at = (a, q) => a[Math.min(a.length - 1, Math.floor(a.length * q))];
+    for (let k = 0; k < 3; k++) {
+      const a = cols[k].sort((p, q) => p - q);
+      const lo = at(a, 0.02), hi = at(a, 0.98);
+      this.bounds.center[k] = (lo + hi) / 2;
+      this.bounds.half[k] = Math.max((hi - lo) / 2, 1e-6);
+    }
+  }
+
+  setFlat(on) { this.target = on ? 1 : 0; }
+
+  toggle() { this.setFlat(this.target < 0.5); }
+
+  // `plane` is two axis letters, e.g. 'xz'; the remaining axis is depth.
+  setPlane(plane) {
+    const a = AXES[plane[0]], b = AXES[plane[1]];
+    if (a === undefined || b === undefined || a === b) return;
+    const next = [a, b, 3 - a - b];
+    if (next.every((v, i) => v === this.axes[i])) return;
+    if (this.t <= 0) { this.axes = next; return; }
+    // Flat on the old plane: rise to 3-D, swap, come back down.
+    this.pending = next;
+    this.resume = this.target;
+    this.target = 0;
+  }
+
+  get plane() { return NAMES[this.axes[0]] + NAMES[this.axes[1]]; }
+  get depthAxis() { return NAMES[this.axes[2]]; }
+
+  setSlice({ on, at, thickness } = {}) {
+    if (on !== undefined) this.slice.on = on;
+    if (at !== undefined) this.slice.at = Math.max(0, Math.min(1, at));
+    if (thickness !== undefined) this.slice.thickness = Math.max(0.005, Math.min(1, thickness));
+  }
+
+  // The slice centre in state units, for a readout.
+  get sliceValue() {
+    const c = this.axes[2];
+    return this.bounds.center[c] + (2 * this.slice.at - 1) * this.bounds.half[c];
+  }
+
+  advance(dt) {
+    const step = dt / this.duration;
+    if (this.t < this.target) this.t = Math.min(this.target, this.t + step);
+    else if (this.t > this.target) this.t = Math.max(this.target, this.t - step);
+    if (this.pending && this.t === 0) {
+      this.axes = this.pending;
+      this.pending = null;
+      this.target = this.resume;
+    }
+  }
+
+  uniforms(aspect) {
+    const [a, b, c] = this.axes;
+    const { center, half } = this.bounds;
+    // Equal units on both plot axes, so the shape is not stretched to fill.
+    const k = this.margin * Math.min(aspect / half[a], 1 / half[b]);
+    return {
+      flat: this.flat,
+      axes: this.axes,
+      center: [center[a], center[b]],
+      scale: [k / aspect, k],
+      depth: [center[c], half[c]],
+      slice: [
+        this.slice.on ? 1 : 0,
+        this.sliceValue,
+        Math.max(1e-6, this.slice.thickness * half[c])
+      ]
+    };
+  }
+}
+
+Object.assign(__exports, { View });
+
+});
+
+__def("director.js", function (__exports, __req) {
+// Runs the show: shuffles through the attractors, dresses each one in a
+// different palette and camera move, and cross-fades between them.
+
+const { catalog, byName } = __req('catalog.js');
+const { PALETTES, oledSafe } = __req('palettes.js');
+const { viewTransform } = __req('mat4.js');
+
+const shuffle = (arr, rng) => {
+  const a = arr.slice();
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(rng() * (i + 1));
+    [a[i], a[j]] = [a[j], a[i]];
+  }
+  return a;
+};
+
+const lerp = (a, b, t) => a + (b - a) * t;
+
+// Where the trajectory actually lives, in view coordinates: the radius of the
+// ball about `target` holding all but the wildest 1.5% of it, and the height
+// its underside reaches. Stragglers are excluded so one escaping particle
+// cannot push the camera into the next county.
+function occupancy(positions, m, target, maxSamples = 24000) {
+  const count = positions.length / 4;
+  const stride = Math.max(1, Math.ceil(count / maxSamples));
+  const radii = [];
+  const heights = [];
+  for (let i = 0; i < count; i += stride) {
+    const x = positions[i * 4], y = positions[i * 4 + 1], z = positions[i * 4 + 2];
+    if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z)) continue;
+    const wx = m[0] * x + m[4] * y + m[8] * z + m[12];
+    const wy = m[1] * x + m[5] * y + m[9] * z + m[13];
+    const wz = m[2] * x + m[6] * y + m[10] * z + m[14];
+    radii.push(Math.hypot(wx - target[0], wy - target[1], wz - target[2]));
+    heights.push(wy);
+  }
+  if (!radii.length) return { radius: 0.7, bottom: 0 };
+  radii.sort((a, b) => a - b);
+  heights.sort((a, b) => a - b);
+  const at = (arr, q) => arr[Math.min(arr.length - 1, Math.floor(arr.length * q))];
+  return { radius: at(radii, 0.985) || 0.7, bottom: at(heights, 0.015) };
+}
+
+const transforms = new Map();
+function transformFor(attractor) {
+  let t = transforms.get(attractor.name);
+  if (!t) {
+    t = viewTransform(attractor.view);
+    transforms.set(attractor.name, t);
+  }
+  return t;
+}
+
+class Director {
+  constructor(scene, {
+    duration = 45,
+    fadeTime = 1.4,
+    rng = Math.random,
+    theme = 'any',
+    pinned = null,
+    quality = null,
+    drift = null,
+    trail = null,
+    oled = true,
+    slice = null,
+    set = 'classic',
+    systems = null,
+    palette = null,
+    zoom = 1,
+    blend = true,
+    onChange = () => {}
+  } = {}) {
+    this.scene = scene;
+    this.duration = duration;
+    this.fadeTime = fadeTime;
+    this.rng = rng;
+    this.theme = theme;
+    this.quality = quality;
+    this.drift = drift;
+    this.trail = trail;
+    this.oled = oled;
+    this.blend = blend;
+    this.palette = palette;
+    this.zoom = zoom;
+    this.onChange = onChange;
+    this.paused = false;
+    this.margin = 1.35;
+    this.sinceReframe = 0;
+
+    // An explicit list (the interactive tool hands over the systems being
+    // studied) takes precedence over a named set.
+    systems = systems && systems.length ? systems : catalog(set);
+    const start = pinned ? systems.find(a => a.name === pinned) || byName(pinned) : null;
+    // Slicing happens on the canonical order, not the shuffled one, so two
+    // instances slicing the same list get provably disjoint sets — otherwise
+    // each would be picking every n-th entry of its own private shuffle and the
+    // two could still land on the same system at the same time.
+    const pool = slice && slice.count > 1
+      ? systems.filter((_, i) => i % slice.count === slice.index)
+      : systems;
+    this.playlist = shuffle(pool.length ? pool : systems, rng);
+    if (start) this.playlist = [start, ...this.playlist.filter(a => a !== start)];
+    this.index = 0;
+
+    this.veil = 1;
+    this.phase = 'in';
+    this.held = 0;
+    this.load(this.playlist[0]);
+  }
+
+  get current() { return this.playlist[this.index]; }
+
+  palettePool() {
+    if (this.palette) {
+      const named = PALETTES.filter(p => p.name.toLowerCase() === this.palette.toLowerCase());
+      if (named.length) return named;
+    }
+    if (this.theme === 'dark') return PALETTES.filter(p => p.dark);
+    // An explicit request for paper is an explicit request for a light ground,
+    // so it is honoured; oledSafe then leaves those palettes alone.
+    if (this.theme === 'paper') return PALETTES.filter(p => !p.dark);
+    if (this.oled) return PALETTES.filter(p => p.dark);
+    return PALETTES;
+  }
+
+  dress(attractor) {
+    const r = this.rng;
+    const pool = this.palettePool();
+    const chosen = pool[Math.floor(r() * pool.length)];
+    const palette = this.oled ? oledSafe(chosen) : chosen;
+    const flip = r() < 0.5;
+
+    // `this.trail` pins whichever of width/fade/tailFade were asked for. The
+    // random values are still drawn either way, so pinning one does not shift
+    // the sequence the others come from.
+    return Object.assign({
+      palette,
+      transform: transformFor(attractor),
+      background: palette.background,
+      color1: flip ? palette.color2 : palette.color1,
+      color2: flip ? palette.color1 : palette.color2,
+      borderColor: palette.borderColor,
+      borderOpacity: lerp(0.5, 0.95, r()),
+      borderWidth: lerp(0.3, 0.9, r()),
+      gridColor: palette.gridColor,
+      gridOpacity: r() < 0.18 ? 0 : palette.gridOpacity * lerp(0.45, 1.0, r()),
+      shadowColor: palette.shadowColor,
+      shadow: r() < 0.7,
+      shading: lerp(0.05, 0.3, r()),
+      width: lerp(4, 11, r() ** 1.5),
+      fade: lerp(0.1, 0.6, r()),
+      tailFade: lerp(0.08, 0.42, r()),
+      // 0 colours by the particle's seed radius, 1 by its index. The notebook
+      // offers only these two ends; a value between them is ours.
+      colorBy: r() < 0.7 ? 0 : 1,
+      blend: this.blend,
+      floorY: -0.5,
+      roomHalf: 2,
+      pixelRatio: 1
+    }, this.trail);
+  }
+
+  load(attractor) {
+    // Resolution changes land here, between shots, where they are invisible.
+    if (this.quality) this.scene.sim.resize(this.quality());
+    const style = this.dress(attractor);
+    style.pixelRatio = this.scene.style ? this.scene.style.pixelRatio : 1;
+    this.scene.style = style;
+    this.scene.camera.randomize(this.rng);
+    this.scene.sim.reset(attractor);
+    this.scene.sim.spinUp();
+
+    const positions = this.scene.sim.readPositions();
+    this.scene.view.measure(positions);
+    const { radius, bottom } = occupancy(positions, style.transform, this.scene.camera.target);
+    this.margin = lerp(1.22, 1.55, this.rng()) / this.zoom;
+    this.scene.camera.frameRadius(radius, this.margin);
+
+    // Keep the floor just under the subject and grow the room to match, so a
+    // sprawling system gets a hall and a compact one gets a room.
+    style.floorY = Math.min(-0.5, bottom - 0.08 * radius);
+    style.roomHalf = Math.max(2, radius * 2.2);
+
+    this.held = 0;
+    this.sinceReframe = 0;
+    if (this.drift) this.drift.reset(attractor);
+    this.onChange(attractor, style, this);
+  }
+
+  // Drifting parameters change the size of the attractor as well as its shape,
+  // so the framing has to follow. The correction is slewed in over seconds
+  // rather than applied outright: a camera that snapped to each new radius
+  // would read as a jolt, which is exactly what --continuous mode is avoiding.
+  reframe(blend) {
+    const style = this.scene.style;
+    const camera = this.scene.camera;
+    if (!style || camera.drag) return;
+
+    const positions = this.scene.sim.readPositions(128);
+    this.scene.view.measure(positions);
+    const { radius, bottom } = occupancy(positions, style.transform, camera.target);
+    if (!(radius > 0)) return;
+
+    const before = camera.distance;
+    camera.frameRadius(radius, this.margin);
+    camera.distance = lerp(before, camera.distance, blend);
+
+    const floor = Math.min(-0.5, bottom - 0.08 * radius);
+    style.floorY = lerp(style.floorY, floor, blend);
+    style.roomHalf = lerp(style.roomHalf, Math.max(2, radius * 2.2), blend);
+  }
+
+  cut(index) {
+    this.index = (index + this.playlist.length) % this.playlist.length;
+    this.load(this.current);
+    this.veil = Math.max(this.veil, 0.85);
+    this.phase = 'in';
+  }
+
+  jump(delta) { this.cut(this.index + delta); }
+
+  goTo(name) {
+    const i = this.playlist.findIndex(a => a.name === name);
+    if (i >= 0) this.cut(i);
+  }
+
+  reshuffleLook() {
+    const style = this.dress(this.current);
+    style.pixelRatio = this.scene.style.pixelRatio;
+    this.scene.style = style;
+    this.onChange(this.current, style, this);
+  }
+
+  advance(dt) {
+    if (this.drift && !this.paused) {
+      this.drift.advance(dt, this.scene.sim);
+      this.sinceReframe += dt;
+      if (this.sinceReframe >= 4) {
+        this.sinceReframe = 0;
+        this.reframe(0.5);
+      }
+    }
+    if (this.phase === 'in') {
+      this.veil -= dt / this.fadeTime;
+      if (this.veil <= 0) { this.veil = 0; this.phase = 'hold'; }
+    } else if (this.phase === 'hold') {
+      if (!this.paused) this.held += dt;
+      if (this.duration > 0 && this.held >= this.duration) this.phase = 'out';
+    } else {
+      this.veil += dt / this.fadeTime;
+      if (this.veil >= 1) {
+        this.veil = 1;
+        this.index = (this.index + 1) % this.playlist.length;
+        this.load(this.current);
+        this.phase = 'in';
+      }
+    }
+    return this.veil;
+  }
+}
+
+Object.assign(__exports, { Director });
+
+});
+
+__def("catalog.js", function (__exports, __req) {
+// Every system the screensaver knows, in named sets. `classic` is Reusser's
+// collection; `lie` holds the Lie brackets of dysts pairs that
+// tools/lie_pairs.py has built; `all` is both.
+
+const { ATTRACTORS } = __req('attractors.js');
+const { LIE_ATTRACTORS } = __req('lie-attractors.js');
+
+const SETS = {
+  classic: ATTRACTORS,
+  lie: LIE_ATTRACTORS,
+  all: [...ATTRACTORS, ...LIE_ATTRACTORS]
+};
+
+// An unknown or empty set falls back to the classics rather than a blank screen.
+const catalog = set => (SETS[set] && SETS[set].length ? SETS[set] : ATTRACTORS);
+
+const byName = name => SETS.all.find(a => a.name === name);
+
+Object.assign(__exports, { SETS, catalog, byName });
+
+});
+
+__def("attractors.js", function (__exports, __req) {
+// Generated from Ricky Reusser's "Strange Attractors on the GPU, Part 2"
+// https://observablehq.com/@rreusser/strange-attractors-on-the-gpu-part-2
+// Regenerate with: node tools/gen-attractors.mjs (see README).
+
+const ATTRACTORS = [
+  {
+    name: "Akgul-Pehlivan",
+    deriv: `
+    a * y - x + z * y,
+    -b * x * z - c * x + y * z + d,
+    e - f * x * y - x * x`,
+    params: {"a":2.8,"b":0.2,"c":1.4,"d":1,"e":10,"f":2},
+    dt: 0.01,
+    initScale: 5,
+    view: { center: [0, 0, -5], size: [15, 15, 15], rotation: [1.5707963268, 0, 0] },
+    refs: [{"title":"A new three-dimensional chaotic system without equilibrium points, its dynamical analyses, and electronic circuit applications","authors":["A. Akgul","I. Pehlivan"],"url":"https://www.researchgate.net/publication/303284335_A_new_three-dimensional_chaotic_system_its_dynamical_analysis_and_electronic_circuit_applications","deets":"Tehnicki Vjesnik 23(1) (2016), pages 209-214."}],
+  },
+  {
+    name: "Aizawa",
+    deriv: `
+    (z - b) * x - d * y,
+    d * x + (z - b) * y,
+    c + a * z - (z * z * z / 3.0) - (x * x + y * y) * (1.0 + e * z) + f * z * (x * x * x)`,
+    params: {"a":0.95,"b":0.7,"c":0.6,"d":3.5,"e":0.25,"f":0.1},
+    dt: 0.02,
+    initScale: 0.1,
+    view: { center: [0, 0, 0.8], size: [1.5, 1.5, 1.5], rotation: [1.5707963268, 0, 0] },
+    tex: ["(z - a) x - d y","d x + (z - b) y","c + a z - \\frac{1}{3}z^3 - (x^2 + y^2) (1 + e z) + f z x^3"],
+    refs: [{"title":"Numerical Studies of Torus Bifurcations","authors":["W. Langford"],"url":"https://www.researchgate.net/publication/238282172_Numerical_Studies_of_Torus_Bifurcations"}],
+  },
+  {
+    name: "Anishchenko-Astakhov",
+    deriv: `
+    mu * x + y - x * z,
+    -x,
+    -eta * z + eta * (x > 0.0 ? 1.0 : 0.0) * x * x`,
+    params: {"mu":1.2,"eta":0.5},
+    dt: 0.05,
+    initScale: 5,
+    initOrigin: [0, 0, 5],
+    view: { center: [0, 2, 0], size: [5, 5, 5], rotation: [0, -1.5707963268, 0] },
+    refs: [{"title":"The Anishchenko–Astakhov Oscillator of Chaotic Self-Sustained Oscillations","authors":["V. S. Anishchenko","T. E. Vadivasova","G. I. Strelkova"],"url":"https://link.springer.com/chapter/10.1007/978-3-319-06871-8_11","deets":"Deterministic Nonlinear Systems pages 175-201."}],
+  },
+  {
+    name: "Arneodo",
+    deriv: `
+    y,
+    z,
+    -a * x - b * y - z + c * x * x * x`,
+    params: {"a":-5.5,"b":3.5,"c":-1},
+    dt: 0.02,
+    initScale: 2,
+    view: { center: [0, 0, 0], size: [4, 10, 10], rotation: [1.5707963268, 0, 1.5707963268] },
+    tex: ["y","z","-a x - b y - z + c x^3"],
+    refs: [{"title":"Strange attractors in volterra equations for species in competition","authors":["A. Arneodo","P. Coullet","J. Peyraud","C. Tresser"],"url":"https://link.springer.com/article/10.1007/BF01832841","deets":"Journal of Mathematical Biology volume 14, pages 153–157 (1982)."}],
+  },
+  {
+    name: "Bouali",
+    deriv: `
+    x * (4.0 - y) + a * z,
+    -y * (1.0 - x * x),
+    -x * (b - z) - c * z`,
+    params: {"a":0.3,"b":1.5,"c":0.05},
+    dt: 0.02,
+    initOrigin: [1, 1, 0],
+    view: { center: [0, 4, -4], size: [6, 6, 6], rotation: [-1.5707963268, 1.5707963268, 0] },
+    tex: ["x (4 - y) + 0.3 z","-y (1 - x^2)","-x (1.5 - z) - 0.05 z"],
+    refs: [{"title":"A 3D Strange Attractor with a Distinctive Silhouette. The Butterfly Effect Revisited","authors":["S. Bouali"],"url":"https://arxiv.org/abs/1311.6128","deets":"(2013)."}],
+  },
+  {
+    name: "Bouali 2",
+    deriv: `
+    alpha * x * (1.0 - y) - beta * z,
+    -gamma * y * (1.0 - x * x),
+    mu * x`,
+    params: {"alpha":3,"beta":2.2,"gamma":1,"mu":1.51},
+    dt: 0.02,
+    initOrigin: [1, 1, 0],
+    view: { center: [0, 2, 0], size: [2.5, 2.5, 2.5], rotation: [0, -1.5707963268, 0] },
+    tex: ["\\alpha x (1 - y) - \\beta z","-y (1 - x^2)","\\mu x"],
+    refs: [{"title":"A 3D Strange Attractor with a Distinctive Silhouette. The Butterfly Effect Revisited","authors":["S. Bouali"],"url":"https://arxiv.org/abs/1311.6128","deets":"(2013)."}],
+  },
+  {
+    name: "Burke-Shaw",
+    deriv: `
+    -s * (x + y),
+    -y - s * x * z,
+    s * x * y + v`,
+    params: {"s":10,"v":4.272},
+    dt: 0.005,
+    view: { center: [0, 0, 0], size: [4, 4, 4], rotation: [-1.5707963268, 0, 0] },
+    tex: ["-s (x + y)","-y - s x z","s x y + v"],
+    refs: [{"title":"Burke-Shaw attractor","authors":["Paul Bourke"],"url":"http://paulbourke.net/fractals/burkeshaw/","deets":"(2010)."},{"title":"The Burke &amp; Shaw System","authors":["Christophe Letellier"],"url":"http://www.atomosyd.net/spip.php?article33","deets":"(2008)."}],
+  },
+  {
+    name: "Chen-Lee",
+    deriv: `
+    alpha * x - y * z,
+    beta * y + x * z,
+    gamma * z + x * y / 3.0`,
+    params: {"alpha":5,"beta":-10,"gamma":-0.38},
+    dt: 0.005,
+    initScale: 25,
+    view: { center: [0, 0, 0], size: [25, 25, 25], rotation: [-1.5707963268, 0, 0] },
+    tex: ["\\alpha x - y z","\\beta y + x z","\\gamma z + \\frac{1}{3} x y"],
+    refs: [{"title":"Alternative implementation of the chaotic Chen–Lee system","authors":["Long-Jye Sheu","Lap-Mou Tam","Hsien-Keng Chen","Seng-Kin Lao"],"url":"https://www.sciencedirect.com/science/article/abs/pii/S0960077908003524","deets":"Chaos, Solitons & Fractals, Volume 41, Issue 4 (2009), Pages 1923-1929."},{"title":"The Chen-Lee Attractor","url":"https://www.vorillaz.com/chen-lee-attractor/"}],
+  },
+  {
+    name: "Chen-Celikovsky",
+    deriv: `
+    alpha * (y - x),
+    -x * z + gamma * y,
+    x * y - beta * z`,
+    params: {"alpha":36,"beta":3,"gamma":20},
+    dt: 0.005,
+    initScale: 1,
+    initOrigin: [0, 0, 20],
+    view: { center: [0, 0, 20], size: [25, 25, 25], rotation: [1.5707963268, 0, 0] },
+    refs: [{}],
+  },
+  {
+    name: "Chen",
+    deriv: `
+    a * (y - x),
+    (c - a) * x - x * z + c * y,
+    x * y - b * z`,
+    params: {"a":40,"b":3,"c":28},
+    dt: 0.003,
+    initScale: 3,
+    initOrigin: [0, 0, 15],
+    view: { center: [0, 0, 20], size: [20, 20, 20], rotation: [1.5707963268, 0, 0] },
+    tex: ["a (y - x)","(c - a) x - x z + c y","x y - b z"],
+    refs: [{"title":"Wikipedia: Multiscroll Attractor","url":"https://en.wikipedia.org/wiki/Multiscroll_attractor#Lu_Chen_attractor"}],
+  },
+  {
+    name: "Coullet",
+    deriv: `
+    y,
+    z,
+    0.8 * x - 1.1 * y - 0.45 * z - x * x * x`,
+    dt: 0.05,
+    initScale: 0.2,
+    view: { center: [0, 0, 0], size: [1.5, 1.5, 1.5], rotation: [0, 0, 0] },
+    tex: ["y","z","0.8 x - 1.1 y - 0.45 z - x^3"],
+    refs: [{"title":"Possible new strange attractors with spiral structure","authors":["A. Arneodo","P. Coullet","C. Tresser"],"url":"https://projecteuclid.org/journals/communications-in-mathematical-physics/volume-79/issue-4/Possible-new-strange-attractors-with-spiral-structure/cmp/1103909142.full","deets":"Comm. Math. Phys. 79(4): 573-579 (1981)."}],
+  },
+  {
+    name: "Dadras",
+    deriv: `
+    y - a * x + b * y * z,
+    c * y - x * z + z,
+    d * x * y - e * z`,
+    params: {"a":3,"b":2.7,"c":1.7,"d":2,"e":9},
+    dt: 0.01,
+    initScale: 2,
+    view: { center: [0, 0, 0], size: [15, 15, 15], rotation: [0, 0, 0] },
+    tex: ["y - a x + b y z","c y - x z + z","d x y - e z"],
+    refs: [{"title":"The chaotic Dadras-Momeni system: Control and hyperchaotification","authors":["H. Saberi-Nik","R. A. Van Gorder","G. Gambino"],"url":"https://www.researchgate.net/publication/274511798_The_chaotic_Dadras-Momeni_system_Control_and_hyperchaotification","deets":"IMA Journal of Mathematical Control and Information (2015)."}],
+  },
+  {
+    name: "Duffing",
+    deriv: `
+    y,
+    gamma * cos(omega * t) - delta * y - alpha * x - beta * x * x * x,
+    -z`,
+    params: {"alpha":-1,"beta":1,"delta":0.3,"gamma":0.37,"omega":1.2},
+    dt: 0.05,
+    initScale: 2,
+    view: { center: [0, -0.1, 0], size: [1, 1, 1], rotation: [0, 0, 0] },
+  },
+  {
+    name: "Finance",
+    deriv: `
+    z + (y - a) * x,
+    1.0 - b * y - x * x,
+    -x - c * z`,
+    params: {"a":0.00001,"b":0.1,"c":1},
+    dt: 0.04,
+    initScale: 0.5,
+    initOrigin: [0, 0, 0],
+    view: { center: [0, 0, 0], size: [3.5, 3.5, 3.5], rotation: [3.1415926536, 1.5707963268, 0] },
+    tex: ["z + (y - a) x","1 - b y - x^2","-x - c z"],
+    refs: [{"title":"A New Finance Chaotic Attractor","authors":["G. Cai","J. Huang"],"url":"http://internonlinearscience.org/upload/papers/20110308103218810.pdf","deets":"International Journal of Nonlinear Science, Vol. 3 (2007) No. 3, pp. 213-220."}],
+  },
+  {
+    name: "Four-wing",
+    deriv: `
+    a * x + y * z,
+    b * x + d * y - x * z,
+    -z - x * y`,
+    params: {"a":0.2,"b":-0.01,"d":-0.4},
+    dt: 0.05,
+    initScale: 2,
+    view: { center: [0, 0, 0], size: [2.5, 2.5, 2.5], rotation: [0, 1.5707963268, 0] },
+    tex: ["0.2 x + y z","-0.01 x - 0.4 y - x z","-z - x y"],
+    refs: [{"title":"A 3-D four-wing attractor and its analysis","authors":["Z. Wang","Y. Sun","B. J. van Wyk","G. Qi","M. A. van Wyk"],"url":"https://www.scielo.br/j/bjp/a/PZsxkWyBdyDpS3sHTQVwKZq/?lang=en","deets":"Braz. J. Phys. 39 (3), Sept 2009."}],
+  },
+  {
+    name: "Genesio-Tesi",
+    deriv: `
+    y,
+    z,
+    -a * z - b * y - x * (1.0 + x)`,
+    params: {"a":0.446,"b":1.1},
+    dt: 0.05,
+    initScale: 0.2,
+    view: { center: [-0.2, 0, 0], size: [1, 1, 1], rotation: [-1.5707963268, 0, 1.5707963268] },
+    tex: ["y","z","-az - by - x(1 + x)"],
+    refs: [{"title":"The Genesio-Tesi System","authors":["Christophe Letellier"],"url":"http://www.atomosyd.net/spip.php?article153"},{"title":"Design, analysis of the Genesio-Tesi chaotic system and its electronic experimental implementation","authors":["A. Sambas","S. Vaidyanathan","M. Mamat","W. S. Mada Sanjaya"],"url":"https://www.researchgate.net/publication/303369826_Design_analysis_of_the_Genesio-Tesi_chaotic_system_and_its_electronic_experimental_implementation","deets":"International Journal of Circuit Theory and Applications, 9(1), 2016, pp. 141-149."}],
+  },
+  {
+    name: "Hadley",
+    deriv: `
+    a * z * y + z * x - x,
+    z * y - a * z * x - y + 1.0,
+    b * (c - z) - (x * x + y * y)`,
+    params: {"a":4,"b":0.2,"c":8},
+    dt: 0.01,
+    initScale: 1,
+    view: { center: [0, 0, 1], size: [2.5, 2.5, 2.5], rotation: [1.5707963268, 0, 0] },
+    tex: ["a z y + z x - x","z y - a z x - y + 1","b (c - z) - (x^2 + y^2)"],
+    refs: [{"title":"Wikipedia: Hadley Cell","url":"https://en.wikipedia.org/wiki/Hadley_cell"}],
+  },
+  {
+    name: "Halvorsen",
+    deriv: `
+    -sigma * x - 4.0 * (y + z) - y * y,
+    -sigma * y - 4.0 * (z + x) - z * z,
+    -sigma * z - 4.0 * (x + y) - x * x`,
+    params: {"sigma":1.3},
+    dt: 0.005,
+    initScale: 2,
+    initOrigin: [-2, -2, -2],
+    view: { center: [-3, -3, -3], size: [12, 12, 12], rotation: [0, 0, 0] },
+    tex: ["-\\sigma x - 4 (y + z) - y^2","-\\sigma y - 4 (z + x) - z^2","-\\sigma z - 4 (x + y) - x^2"],
+    refs: [{"title":"Breaking Symmetries of the Reservoir Equations in Echo State Networks","authors":["J. Herteux","C. Räth"],"url":"https://arxiv.org/abs/2010.07103","deets":"Chaos 30, 123142 (2020)."}],
+  },
+  {
+    name: "Liu-Chen",
+    deriv: `
+    0.4 * x - y * z,
+    -12.0 * y + x * z,
+    -5.0 * z + x * y`,
+    dt: 0.005,
+    initScale: 20,
+    view: { center: [0, 0, 0], size: [12, 12, 12], rotation: [0, 0, 0] },
+    tex: ["0.4 x - y z","-12 y + x z","-5 z + x y"],
+  },
+  {
+    name: "Lorenz",
+    deriv: `
+    sigma * (y - x),
+    x * (rho - z) - y,
+    x * y - beta * z`,
+    params: {"sigma":10,"rho":28,"beta":2.6666666666666665},
+    dt: 0.005,
+    initScale: 20,
+    initOrigin: [0, 0, 28],
+    view: { center: [0, 0, 28], size: [28, 28, 28], rotation: [1.5707963268, 0, 0] },
+    tex: ["\\sigma (y - x)","x(\\rho - z) - y","x y - \\beta z"],
+  },
+  {
+    name: "Lorenz Mod 1",
+    deriv: `
+    -alpha * x + y * y - z * z + alpha * beta,
+    x * (y - 4.0 * z) + gamma,
+    z + x * (4.0 * y + z)`,
+    params: {"alpha":0.1,"beta":14,"gamma":0.08},
+    dt: 0.001,
+    initScale: 20,
+    view: { center: [0, 0, 0], size: [40, 40, 40], rotation: [0, 0, 0] },
+    tex: ["-\\alpha x + y^2 - z^2 + \\alpha \\beta","x (y - 4 z) + \\gamma","z + x (4 y + z)"],
+  },
+  {
+    name: "Lorenz Mod 2",
+    deriv: `
+    -alpha * x + y * y - z * z + alpha * beta,
+    x * (y - 5.0 * z) + gamma,
+    -z + x * (5.0 * y + z)`,
+    params: {"alpha":0.9,"beta":9.9,"gamma":1},
+    dt: 0.003,
+    initScale: 10,
+    view: { center: [0, 0, 0], size: [15, 15, 15], rotation: [0, 0, 0] },
+    tex: ["-\\alpha x + y^2 - z^2 + \\alpha \\beta","x (y - 5 z) + \\gamma","-z + x (5 y + z)"],
+  },
+  {
+    name: "Lü-Chen",
+    deriv: `
+    -4.0 * x + z * y,
+    -10.0 * y + z * x,
+    (10.0 * 4.0 * z) / 14.0 - y * x + 18.1`,
+    dt: 0.005,
+    view: { center: [0, 0, 5], size: [20, 20, 20], rotation: [-1.5707963268, 1.5707963268, 0] },
+    tex: ["-4 x + z y","-10 y + z x","\\frac{20}{7} z - y x + 18.1"],
+  },
+  {
+    name: "Newton-Leipnik",
+    deriv: `
+    0.4 * x + y + 10.0 * y * z,
+    -x - 0.4 * y + 5.0 * x * z,
+    0.175 * z - 5.0 * x * y`,
+    dt: 0.0001,
+    initScale: 100,
+    view: { center: [0, 0, 0], size: [80, 80, 80], rotation: [0, 0, 0] },
+    tex: ["0.4 x + y + 10 y z","-x - 0.4 y + 5 x z","0.175 z - 5 x y"],
+    refs: [{"title":"Double strange attractors in rigid body motion with linear feedback control","authors":["R. B. Leipnik","T. A. Newton"],"url":"https://www.semanticscholar.org/paper/Double-strange-attractors-in-rigid-body-motion-with-Leipnik-Newton/a24b76a848c5ba87901d9d03945c180dd2c88939","deets":"Phys Lett A, Vol. 86 (1981), pp. 63–7."}],
+  },
+  {
+    name: "Nosé-Hoover",
+    deriv: `
+    y,
+    -x + y * z,
+    1.5 - y * y`,
+    dt: 0.02,
+    view: { center: [0, 0, 0], size: [5, 5, 5], rotation: [1.5707963268, 0, 0] },
+    tex: ["y","-x + y z","1.5 - y^2"],
+    refs: [{"title":"1986 The Nosé-Hoover System (Sprott A System)","authors":["Christophe Letellier"],"url":"http://www.atomosyd.net/spip.php?article193"}],
+  },
+  {
+    name: "Qi-Chen",
+    deriv: `
+    alpha * (y - x) + y * z,
+    beta * x + y - x * z,
+    x * y - gamma * z`,
+    params: {"alpha":38,"beta":80,"gamma":2.6666666666666665},
+    dt: 0.0015,
+    initOrigin: [0, 0, 75],
+    view: { center: [0, 0, 80], size: [50, 50, 50], rotation: [1.5707963268, 0, 0] },
+    tex: ["38 (y - x) + y z","80 x + y - x z","x y - \\frac{8}{3}z"],
+  },
+  {
+    name: "Rabinovich-Fabrikant",
+    deriv: `
+    y * (z - 1.0 + x * x) + a * x,
+    x * (3.0 * z + 1.0 - x * x) + a * y,
+    -2.0 * z * (b + x * y)`,
+    params: {"a":0.1,"b":0.2875},
+    dt: 0.03,
+    initScale: 1,
+    initOrigin: [0.1, 0.1, 1.1],
+    view: { center: [0, 0, 0.7], size: [2, 2, 1], rotation: [1.5707963268, 0, 0] },
+    refs: [{"title":"Hidden Strange Nonchaotic Attractors","authors":["M. F. Danca","N. Kuznetsov"],"url":"https://www.mdpi.com/2227-7390/9/6/652","deets":"Mathematics 2021, 9(6), 652."}],
+  },
+  {
+    name: "Rayleigh-Benard",
+    deriv: `
+    -9.0 * x + 9.0 * y,
+    12.0 * x - y - x * z,
+    x * y - 0.5 * z`,
+    dt: 0.02,
+    initScale: 2,
+    initOrigin: [0, 0, 10],
+    view: { center: [0, 0, 10], size: [9, 9, 9], rotation: [1.5707963268, 0, 0] },
+    tex: ["-9 x + 9 y","12 x - y - x z","x y - 0.5 z"],
+  },
+  {
+    name: "Rössler",
+    deriv: `
+    -z - y,
+    x + 0.1 * y,
+    0.1 + z * (x - 14.0)`,
+    dt: 0.02,
+    initScale: 14,
+    initOrigin: [0, 0, 0.1],
+    view: { center: [0, 0, 15], size: [20, 20, 25], rotation: [1.5707963268, 0, 0] },
+    tex: ["-z - y","x + 0.1 y","0.1 + z (x - 14)"],
+  },
+  {
+    name: "Rucklidge",
+    deriv: `
+    -2.0 * x + alpha * y - y * z,
+    x,
+    -z + y * y`,
+    params: {"alpha":6.7},
+    dt: 0.02,
+    initScale: 5,
+    view: { center: [0, 0, 8], size: [9, 9, 9], rotation: [1.5707963268, 0, 0] },
+    tex: ["-2 x + \\alpha y - y z","x","-z + y^2"],
+  },
+  {
+    name: "Sakarya",
+    deriv: `
+    -x + y + y * z,
+    -x - y + 0.4 * x * z,
+    z - 0.3 * x * y`,
+    dt: 0.003,
+    initScale: 50,
+    view: { center: [0, 0, 0], size: [40, 40, 40], rotation: [1.5707963268, 0, 0] },
+    tex: ["-x + y + y z","-x - y + 0.4 x z","z - 0.3 x y"],
+  },
+  {
+    name: "Thomas",
+    deriv: `
+    -alpha * x + sin(y),
+    -alpha * y + sin(z),
+    -alpha * z + sin(x)`,
+    params: {"alpha":0.19},
+    dt: 0.1,
+    view: { center: [0, 0, 0], size: [4.5, 4.5, 4.5], rotation: [1.5707963268, 0, 0] },
+    tex: ["-\\alpha x + \\sin(y)","-\\alpha  y + \\sin(z)","-\\alpha  z + \\sin(x)"],
+    refs: [{"title":"Deterministic Chaos Seen in Terms of Feedback Circuit: Analysis, Synthesis, 'Labyrinth Chaos'","authors":["R. Thomas"],"url":"https://www.worldscientific.com/doi/abs/10.1142/S0218127499001383","deets":"International Journal of Bifurcation and Chaos, Vol. 09, No. 10, pp. 1889-1905 (1999)."},{"title":"Wikipedia: Thomas' cyclically symmetric attractor","url":"https://en.wikipedia.org/wiki/Thomas%27_cyclically_symmetric_attractor"}],
+  },
+  {
+    name: "TSUCS1",
+    deriv: `
+    40.0 * (y - x) + 0.5 * x * z,
+    20.0 * y - x * z,
+    0.833 * z + x * y - 0.65 * x * x`,
+    dt: 0.003,
+    initScale: 20,
+    view: { center: [0, 0, 40], size: [60, 60, 60], rotation: [1.5707963268, 0, 0] },
+    tex: ["40 (y - x) + 0.5 x z","20 y - x z","0.833 z + x y - 0.65 x^2"],
+    refs: [{"title":"A three-scroll chaotic attractor","authors":["D. Li"],"url":"https://www.semanticscholar.org/paper/A-three-scroll-chaotic-attractor-Li/dbeb673b0a2542d75e26a18a095672f917176398","deets":"Physics Letters A, Volume 372, Issue 4, 21 January 2008, Pages 387-393."}],
+  },
+  {
+    name: "TSUCS2",
+    deriv: `
+    40.0 * (y - x) + 0.16 * x * z,
+    55.0 * x - x * z + 20.0 * y,
+    1.833 * z + x * y - 0.65 * x * x`,
+    dt: 0.0015,
+    initScale: 80,
+    view: { center: [0, 0, 100], size: [150, 150, 150], rotation: [1.5707963268, 0, 0] },
+    tex: ["40 (y - x) + 0.16 x z","55 x - x z + 20 y","1.833 z + x y - 0.65 x^2"],
+    refs: [{"title":"A three-scroll chaotic attractor","authors":["D. Li"],"url":"https://www.semanticscholar.org/paper/A-three-scroll-chaotic-attractor-Li/dbeb673b0a2542d75e26a18a095672f917176398","deets":"Physics Letters A, Volume 372, Issue 4, 21 January 2008, Pages 387-393."}],
+  },
+  {
+    name: "Wang-Sun",
+    deriv: `
+    x * 0.2 + y * z,
+    -0.01 * x + -0.4 * y - x * z,
+    -z - x * y`,
+    dt: 0.04,
+    initScale: 2,
+    view: { center: [0, 0, 0], size: [2, 2, 2], rotation: [1.5707963268, 0, 0] },
+    tex: ["0.2 x + y z","-0.01 x + -0.4 y - x z","-z - x y"],
+  },
+  {
+    name: "Yu-Wang",
+    deriv: `
+    10.0 * (y - x),
+    40.0 * x - 2.0 * x * z,
+    exp(x * y) - 2.5 * z`,
+    dt: 0.003,
+    initScale: 2,
+    initOrigin: [0, 0, 30],
+    view: { center: [0, 0, 30], size: [5, 5, 30], rotation: [1.5707963268, 0, 0] },
+    tex: ["10 (y - x)","40 x - 2 x z","e^{x y} - 2.5 z"],
+  },
+  {
+    name: "Genus-5 Multispiral",
+    deriv: `
+    alpha * (y - x - (
+    abs(x) < s0
+    ? m0 * x + sign(x) * xi0
+    : abs(x) < s1
+    ? m1 * x + sign(x) * (m0 - m1) * s0
+    : m2 * x + sign(x) * ((m1 - m2) * s1 + (m0 - m1) * s0)
+    )),
+    x - y + z,
+    -beta * y - gamma * z`,
+    params: {"alpha":14.6,"beta":12,"gamma":0.9,"s0":1,"s1":3,"m0":-0.7142857142857143,"m1":-1.1428571428571428,"m2":-0.7,"xi0":0},
+    dt: 0.02,
+    initScale: 1,
+    initOrigin: [0, 0, 0],
+    view: { center: [0, 0, 0], size: [5.5, 5.5, 5.5], rotation: [1.5707963268, 0, 0] },
+    tex: ["-","-","-"],
+    refs: [{"title":"1999 A Genus-5 Multispiral Attractor","authors":["Christophe Letellier"],"url":"http://www.atomosyd.net/spip.php?article137"},{"title":"Differential equations with multispiral attractors","authors":["M. A. Aziz-Alaoui"],"url":"https://www.worldscientific.com/doi/10.1142/S0218127499000729","deets":"International Journal of Bifurcation & Chaos, 9, 1009-1039, 1999."}],
+  },
+  {
+    name: "A Semi-Conductor Laser",
+    deriv: `
+    0.5 * x * z + (w - alpha * z * 0.5) * y + K,
+    -(w - alpha * z * 0.5) * x + y * z * 0.5,
+    -2.0 * Gamma * z - (1.0 + 2.0 * B * z) * (x * x + y * y - 1.0)`,
+    params: {"K":0.3,"w":0,"alpha":8,"B":0.015,"Gamma":0.035},
+    dt: 0.012,
+    initScale: 1,
+    initOrigin: [0, 0, 0],
+    view: { center: [0, 0, 0], size: [3, 3, 3], rotation: [1.5707963268, 0, 0] },
+    tex: ["-","-","-"],
+    refs: [{"title":"1999 A Semi-Conductor Laser Driven by a Light Beam","authors":["Christophe Letellier"],"url":"http://www.atomosyd.net/spip.php?article129"},{"title":"A unifying view of bifurcations in a semiconductor laser subject to optical injection","authors":["S.Wieczorek","B. Krauskopf","D. Lenstra"],"url":"https://research-information.bris.ac.uk/en/publications/a-unifying-view-of-bifurcations-in-a-semiconductor-laser-subject-","deets":"Optics Communications, 172, 279295, 1999."}],
+  },
+  {
+    name: "Multi-folded Toroidal",
+    deriv: `
+    y,
+    (lambda + z + x * x * (1.0 - 0.5 * x * x)) * y - (w0 * w0) * x,
+    mu - x * x`,
+    params: {"lambda":0,"w0":2.7,"mu":0.3},
+    dt: 0.015,
+    initScale: 1,
+    initOrigin: [0, 0, 0],
+    view: { center: [0, 0, 0], size: [4, 4, 2], rotation: [1.5707963268, 0, 0] },
+    tex: ["-","-","-"],
+    refs: [{"title":"2010 Multi-Folded Toroidal Chaos","authors":["Christophe Letellier"],"url":"http://www.atomosyd.net/spip.php?article220"},{"title":"A simple autonomous quasiperiodic self-oscillator","authors":["A. P. Kuznetsov","S. P. Kuznetsov","N. V. Stankevich"],"url":"https://www.researchgate.net/publication/222396257_A_simple_autonomous_quasiperiodic_self-oscillator","deets":"Communications in Nonlinear Science and Numerical Simulation, 15 (6), 1676-1681, 2010."}],
+  },
+  {
+    name: "Unimodal Toroidal",
+    deriv: `
+    z * (lambda * x - mu * y) + (2.0 - z) * (alpha * x * (1.0 - (x * x + y * y) / (R * R)) - beta * y),
+    z * (mu * x + lambda * y) + (2.0 - z) * (alpha * y * (1.0 - (x * x + y * y) / (R * R)) + beta * x),
+    1.0 / eps * (z * ((2.0 - z) * (a * (z - 2.0) * (z - 2.0) + b) - d * x) * (z + m * (x * x + y * y) - eta) - eps * c * (z - 1.0))`,
+    params: {"alpha":2.8,"eps":0.1,"a":3,"b":0.8,"c":1,"d":0.1,"m":0.05,"eta":3.312,"R":10,"beta":5,"lambda":-2,"mu":1},
+    dt: 0.002,
+    initScale: 1,
+    initOrigin: [0, 0, 1],
+    view: { center: [0, 0, 2], size: [8, 8, 4], rotation: [1.5707963268, 0, 0] },
+    tex: ["-","-","-"],
+    refs: [{"title":"Constructing homoclinic orbits and chaotic attractors","authors":["Bo Deng"],"url":"https://www.worldscientific.com/doi/abs/10.1142/S0218127494000599","deets":"International Journal of Bifurcation & Chaos, 4, 823-841, 1994."},{"title":"1994 Unimodal Toroidal Chaos","authors":["Christophe Letellier"],"url":"http://www.atomosyd.net/spip.php?article67"}],
+  },
+  {
+    name: "Cord Attractor",
+    deriv: `
+    -y - z + 0.25 * (8.0 - x),
+    (x - 1.0) * y - 4.0 * x * z + 1.0,
+    4.0 * x * y + (x - 1.0) * z`,
+    dt: 0.01,
+    initScale: 10,
+    initOrigin: [0, 0, 0],
+    view: { center: [0, 0, 2], size: [10, 40, 40], rotation: [1.5707963268, 1.5707963268, 0] },
+    tex: ["-","-","-"],
+    refs: [{"title":"2012 The \"Cord\" Attractor","authors":["Christophe Letellier"],"url":"http://www.atomosyd.net/spip.php?article185"}],
+  },
+  {
+    name: "Torn Unimodal Chaos",
+    deriv: `
+    33.0 * x + 150.0 * y - 1.0 * x * y - (3.5 * z + 4815.0) * x / (x + 0.01),
+    410.0 + 0.59 * z - 4.0 * y - 2.5 * x * y / (y + 0.01),
+    2.5 + 5.29 * x * z - 750.0 * z`,
+    dt: 0.002,
+    initScale: 10,
+    initOrigin: [125, 25, 0],
+    view: { center: [140, 20, 170], size: [20, 10, 200], rotation: [1.5707963268, 0, 0] },
+    tex: ["33.0 * x + 150.0 * y - 1.0 * x * y - (3.5 * z + 4815.0) * x / (x + 0.01)","410.0 + 0.59 * z - 4.0 * y - 2.5 * x * y / (y + 0.01)","2.5 + 5.29 * x * z - 750.0 * z"],
+    refs: [{"title":"Strange attractors in 3-variable reaction systems","authors":["O. E. Rössler","P. J. Ortoleva"],"deets":"Lecture Notes in Biomathematics, 21, 67-73, 1978."},{"title":"1978 Torn Unimodal Chaos","authors":["Christohpe Letellier"],"url":"http://www.atomosyd.net/spip.php?article65"}],
+  },
+  {
+    name: "Lorenz 1984",
+    deriv: `
+    -y * y - z * z + alpha * (beta - x),
+    x * y - 4.0 * x * z - y + 1.0,
+    4.0 * x * y + x * z - z`,
+    params: {"alpha":0.25,"beta":8},
+    dt: 0.01,
+    initScale: 1,
+    initOrigin: [0, 0, 0],
+    view: { center: [1, 0, 0], size: [2.8, 2.8, 2.8], rotation: [0, 0, -1.5707963268] },
+    tex: ["-y^2 - z^2 + \\alpha (\\beta - x)","x y - 4 x z - y + 1","4 x y + x z - z"],
+    refs: [{"title":"Irregularity: a fundamental property of the atmosphere","url":"https://onlinelibrary.wiley.com/doi/10.1111/j.1600-0870.1984.tb00230.x","deets":"Tellus A, 36, 98-110, 1984."},{"title":"1984 A 3D Model for Global Atmospheric Circulation","authors":["Christophe Letellier"],"url":"http://www.atomosyd.net/spip.php?article42"}],
+  },
+];
+
+const byName = name => ATTRACTORS.find(a => a.name === name);
+
+Object.assign(__exports, { ATTRACTORS, byName });
+
+});
+
+__def("lie-attractors.js", function (__exports, __req) {
+// Generated by tools/lie_pairs.py from tools/lie-pairs.json. Do not edit.
+// Each entry is the Lie bracket [f, g] = (df/dx) g - (dg/dx) f of two dysts
+// systems, computed with autoLie. Regenerate: python tools/lie_pairs.py render
+
+const LIE_ATTRACTORS = [
+  {
+    name: "[DequanLi, Blasius]",
+    f: "DequanLi",
+    g: "Blasius",
+    deriv: `
+    -0.0016*x * x*y*z/(0.0025*x * x + 0.1*x + 1.0) + 0.4*x * x*y/(0.0025*x * x + 0.1*x + 1.0) - 0.2*x * x*z/(0.05*x + 1.0) + 11.0*x * x/(0.05*x + 1.0) - 0.4*x*y * y/(0.0025*x * x + 0.1*x + 1.0) + 0.16*x*y*z + 12.0*x*y/(0.05*x + 1.0) - 1.6*x*z + 0.0096*x + 8.0*y * y/(0.05*x + 1.0) - 40.0*y*z - 80.0*y,
+    0.0016*x * x*y*z/(0.0025*x * x + 0.1*x + 1.0) - 0.65*x * x*y - 0.4*x * x*y/(0.0025*x * x + 0.1*x + 1.0) + 0.2*x * x*z/(0.05*x + 1.0) - 11.0*x * x/(0.05*x + 1.0) + x*y * y + 0.4*x*y * y/(0.0025*x * x + 0.1*x + 1.0) - x*y*z + 0.168*x*y*z/(0.05*x + 1.0) - 3.0*x*y/(0.05*x + 1.0) - x*z * z + 63.0*x*z + 109.94*x - 8.0*y * y/(0.05*x + 1.0) + 1.833*y*z,
+    0.65*x * x*y + 0.46*x * x*y/(0.05*x + 1.0) - 7.8*x * x - x*y * y - 0.2*x*y * y/(0.05*x + 1.0) - x*y*z + 10.0*x*y + x*z * z - 55.0*x*z - 20.0*y*z + 0.10998`,
+    params: {},
+    dt: 6.487e-06,
+    initScale: 1.945,
+    initOrigin: [7.812, 6.909, 0.09177],
+    view: {"center": [-0.004312, -0.04954, -206.5], "size": [78.77, 78.77, 78.77], "rotation": [1.5707963268, 0, 0]},
+    refs: [{"title": "Lie bracket of DequanLi and Blasius, by autoLie", "authors": ["dysts", "autoLie"]}],
+    history: {"origin": "[DequanLi, Blasius] · a Lie bracket of two dysts systems", "text": ["This is neither system. It is the Lie bracket of two of them, [f, g] = (∂f/∂x) g − (∂g/∂x) f, with f the DequanLi flow and g the Blasius flow, at their published parameters. The bracket measures how far the two flows fail to commute: follow f then g for a moment, then f and g backwards, and you miss where you started by an amount proportional to [f, g].", "f — DequanLi: Related to the Three Scroll unified attractor TSUCS-2 Li, Phys Lett A. 2008: 387-393.", "g — Blasius:  A chaotic food web composed of interacting predators,, consumers, and vegetation. Blasius, Huppert, Stone. Nature 1999", "Its own flow is chaotic: nearby particles separate at roughly e^0.06 per crossing of the attractor.", "The bracket was traced to closed form, printed as GLSL, and checked against autoLie's autograd bracket on the attractor (agreement to 4e-16). [g, f] is the same field reversed: the same curves, run backwards, so its attractors are this one's repellers."], "sources": ["https://github.com/williamgilpin/dysts", "https://github.com/virati/autoLie"]},
+    lie: {"lyapunov": 0.06152, "bounded": true, "autolieError": 3.54e-16},
+  },
+  {
+    name: "[Hadley, SprottA]",
+    f: "Hadley",
+    g: "SprottA",
+    deriv: `
+    x*y + 4.0*x*z + 0.8*y - 2.0*z - 1.0,
+    -x * x - x*y*z + 4.0*x*z * z - 3.2*x - 3.0*y*z - z * z - z + 1.8,
+    -4.0*x * x + x*y * y - 4.0*x*y*z + x + 3.0*y * y + y*z + 2.0*y - 1.0`,
+    params: {},
+    dt: 0.007445,
+    initScale: 1.0,
+    initOrigin: [0.0, 0.0, 0.0],
+    view: {"center": [0.004072, 0.1791, -0.1604], "size": [3.437, 3.437, 3.437], "rotation": [1.5707963268, 0, 0]},
+    refs: [{"title": "Lie bracket of Hadley and SprottA, by autoLie", "authors": ["dysts", "autoLie"]}],
+    history: {"origin": "[Hadley, SprottA] · a Lie bracket of two dysts systems", "text": ["This is neither system. It is the Lie bracket of two of them, [f, g] = (∂f/∂x) g − (∂g/∂x) f, with f the Hadley flow and g the SprottA flow, at their published parameters. The bracket measures how far the two flows fail to commute: follow f then g for a moment, then f and g backwards, and you miss where you started by an amount proportional to [f, g].", "f — Hadley: An atmospheric convective cell. G. Hadley (1735). On the cause of the general trade winds. Philosophical Transactions of the Royal Society, vol. 34, pp. 58--62.", "g — SprottA: A member of the Sprott family of algebraically-simple chaotic sytems. Sprott (1994). Some simple chaotic flows. Physical Review E (1994).", "Its own flow is chaotic: nearby particles separate at roughly e^0.26 per crossing of the attractor.", "The bracket was traced to closed form, printed as GLSL, and checked against autoLie's autograd bracket on the attractor (agreement to 3e-16). [g, f] is the same field reversed: the same curves, run backwards, so its attractors are this one's repellers."], "sources": ["https://github.com/williamgilpin/dysts", "https://github.com/virati/autoLie"]},
+    lie: {"lyapunov": 0.2606, "bounded": true, "autolieError": 3.14e-16},
+  },
+  {
+    name: "[Hadley, Tsucs2]",
+    f: "Hadley",
+    g: "Tsucs2",
+    deriv: `
+    -2.0*x * x*y + 0.8*x * x*z - 40.0*x*y + 160.5*x*z + 0.5*y * y*z - 80.0*y * y + 32.0*y + 0.5*z * z * z - 41.666*z * z - 0.9*z + 32.0,
+    2.6*x * x * x + 0.5*x*y*z - 40.0*x*y - 2.0*x*z * z + 236.468*x*z - y * y*z + 40.0*y * y - 160.0*y*z - z * z * z + 1.8*z - 20.0,
+    -0.65*x * x * x + 0.39*x * x - 1.3*x*y * y + 2.0*x*y*z - 83.132*x*y - 0.8*x*z * z - 40.0*x*z + 1.34*x + y * y * y + 160.0*y * y + y*z * z + 40.0*y*z - 1.8*y`,
+    params: {},
+    dt: 4.539e-07,
+    initScale: 17.65,
+    initOrigin: [0.5224, 0.1174, 38.73],
+    view: {"center": [-169.9, -163.6, -84.85], "size": [362.3, 362.3, 362.3], "rotation": [1.5707963268, 0, 0]},
+    refs: [{"title": "Lie bracket of Hadley and Tsucs2, by autoLie", "authors": ["dysts", "autoLie"]}],
+    history: {"origin": "[Hadley, Tsucs2] · a Lie bracket of two dysts systems", "text": ["This is neither system. It is the Lie bracket of two of them, [f, g] = (∂f/∂x) g − (∂g/∂x) f, with f the Hadley flow and g the Tsucs2 flow, at their published parameters. The bracket measures how far the two flows fail to commute: follow f then g for a moment, then f and g backwards, and you miss where you started by an amount proportional to [f, g].", "f — Hadley: An atmospheric convective cell. G. Hadley (1735). On the cause of the general trade winds. Philosophical Transactions of the Royal Society, vol. 34, pp. 58--62.", "g — Tsucs2: A named attractor related to the DequanLi attractor Pan, Zhou, Li (2013). Synchronization of Three-Scroll Unified Chaotic System (TSUCS) and its hyper-chaotic system using active pinning control", "Its own flow is chaotic: nearby particles separate at roughly e^0.05 per crossing of the attractor.", "The bracket was traced to closed form, printed as GLSL, and checked against autoLie's autograd bracket on the attractor (agreement to 2e-15). [g, f] is the same field reversed: the same curves, run backwards, so its attractors are this one's repellers."], "sources": ["https://github.com/williamgilpin/dysts", "https://github.com/virati/autoLie"]},
+    lie: {"lyapunov": 0.0538, "bounded": true, "autolieError": 2.26e-15},
+  },
+  {
+    name: "[Lorenz, Rossler]",
+    f: "Lorenz",
+    g: "Rossler",
+    deriv: `
+    x*y - x*z + 38.0*x + 11.0*y + 7.333*z,
+    -x * x*z + 5.9*x*z + 3.2*x + y*z - 38.0*y + z * z - 28.0*z,
+    -x * x*y + x * x + 5.9*x*y + 10.0*x*z - y * y - 11.0*y*z - 0.5334`,
+    params: {},
+    respawn: 29.47,
+    dt: 8.094e-05,
+    initScale: 7.367,
+    initOrigin: [-0.4471, -0.3125, 23.55],
+    view: {"center": [-0.4471, -0.3125, 23.55], "size": [29.47, 29.47, 29.47], "rotation": [1.5707963268, 0, 0]},
+    refs: [{"title": "Lie bracket of Lorenz and Rossler, by autoLie", "authors": ["dysts", "autoLie"]}],
+    history: {"origin": "[Lorenz, Rossler] · a Lie bracket of two dysts systems", "text": ["This is neither system. It is the Lie bracket of two of them, [f, g] = (∂f/∂x) g − (∂g/∂x) f, with f the Lorenz flow and g the Rossler flow, at their published parameters. The bracket measures how far the two flows fail to commute: follow f then g for a moment, then f and g backwards, and you miss where you started by an amount proportional to [f, g].", "f — Lorenz: A minimal weather model based on atmospheric convection. Lorenz, Edward N (1963). Deterministic nonperiodic flow. Journal of the atmospheric sciences 20.2 (1963): 130-141.", "g — Rossler: Spiral-type chaos in a simple oscillator model. Rossler, O. E. (1976), An Equation for Continuous Chaos, Physics Letters, 57A (5): 3972013398,", "Neither [f, g] nor [g, f] has a bounded attractor at these parameters: from every seed tried, particles either escape to infinity or stall at a fixed point. What you see is the field's flow near f's attractor, each particle re-seeded there once it runs away. When f and g both have constant divergence, as Lorenz and most of Sprott's systems do, the bracket is volume-preserving and cannot have an attractor at all.", "The bracket was traced to closed form, printed as GLSL, and checked against autoLie's autograd bracket on the attractor (agreement to 4e-16). [g, f] is the same field reversed: the same curves, run backwards, so its attractors are this one's repellers."], "sources": ["https://github.com/williamgilpin/dysts", "https://github.com/virati/autoLie"]},
+    lie: {"lyapunov": null, "bounded": false, "autolieError": 3.81e-16},
+  },
+  {
+    name: "[Rossler, SaltonSea]",
+    f: "Rossler",
+    g: "SaltonSea",
+    deriv: `
+    0.115*x * x - 0.147*x*y - 0.11*x*z - 0.115*y * y - 0.115*y*z + 5.5*y*z/(y + 15.0) + 25.4*y + 30.3*z,
+    -0.115*x * x - 15.5*x*y*z/(y * y + 30.0*y + 225.0) + 15.5*x*y*z/(y + 15.0) - 0.115*x*y + 15.5*x*z/(y + 15.0) + 25.4*x - 3.1*y * y*z/(y * y + 30.0*y + 225.0) + 0.06*y * y + 0.06*y*z - 88.35*y*z/(y + 15.0) + 3.1*y/(y + 15.0),
+    -0.055*x * x*z - 0.115*x*y*z + 10.0*x*y*z/(y * y + 30.0*y + 225.0) + 22.0*x*z - 10.0*x*z/(y + 15.0) + 2.0*y * y*z/(y * y + 30.0*y + 225.0) - 2.0*y*z/(y + 15.0) - 2.0*y/(y + 15.0) + 1.66`,
+    params: {},
+    dt: 6.412e-05,
+    initScale: 1.947,
+    initOrigin: [6.513, 0.4772, 0.3416],
+    view: {"center": [2.778, 232.9, 207.1], "size": [321.6, 321.6, 321.6], "rotation": [1.5707963268, 0, 0]},
+    refs: [{"title": "Lie bracket of Rossler and SaltonSea, by autoLie", "authors": ["dysts", "autoLie"]}],
+    history: {"origin": "[Rossler, SaltonSea] · a Lie bracket of two dysts systems", "text": ["This is neither system. It is the Lie bracket of two of them, [f, g] = (∂f/∂x) g − (∂g/∂x) f, with f the Rossler flow and g the SaltonSea flow, at their published parameters. The bracket measures how far the two flows fail to commute: follow f then g for a moment, then f and g backwards, and you miss where you started by an amount proportional to [f, g].", "f — Rossler: Spiral-type chaos in a simple oscillator model. Rossler, O. E. (1976), An Equation for Continuous Chaos, Physics Letters, 57A (5): 3972013398,", "g — SaltonSea: An eco-epidemiological model of bird and fish abundances in the Salton sea of southern California. Upadhyay, Bairagi, Kundu, Chattopadhyay (2007).Chaos in eco-epidemiological problem of the Salton Sea and its possible control. Applied mathematics and computation.", "Its own flow is chaotic: nearby particles separate at roughly e^0.09 per crossing of the attractor.", "The bracket was traced to closed form, printed as GLSL, and checked against autoLie's autograd bracket on the attractor (agreement to 5e-16). [g, f] is the same field reversed: the same curves, run backwards, so its attractors are this one's repellers."], "sources": ["https://github.com/williamgilpin/dysts", "https://github.com/virati/autoLie"]},
+    lie: {"lyapunov": 0.08897, "bounded": true, "autolieError": 4.76e-16},
+  },
+  {
+    name: "[Rossler, SprottA]",
+    f: "Rossler",
+    g: "SprottA",
+    deriv: `
+    y * y - y*z - 0.2*y - 1.0,
+    -x*y*z - x*z - 0.2*x + 5.7*y*z - 0.2*y - z,
+    -x*y * y + 2.0*x*y + x + 6.1*y * y + y*z - 5.7`,
+    params: {},
+    dt: 0.01296,
+    initScale: 1.947,
+    initOrigin: [6.513, 0.4772, 0.3416],
+    view: {"center": [2.685, -0.1149, -0.7008], "size": [4.415, 4.415, 4.415], "rotation": [1.5707963268, 0, 0]},
+    refs: [{"title": "Lie bracket of Rossler and SprottA, by autoLie", "authors": ["dysts", "autoLie"]}],
+    history: {"origin": "[Rossler, SprottA] · a Lie bracket of two dysts systems", "text": ["This is neither system. It is the Lie bracket of two of them, [f, g] = (∂f/∂x) g − (∂g/∂x) f, with f the Rossler flow and g the SprottA flow, at their published parameters. The bracket measures how far the two flows fail to commute: follow f then g for a moment, then f and g backwards, and you miss where you started by an amount proportional to [f, g].", "f — Rossler: Spiral-type chaos in a simple oscillator model. Rossler, O. E. (1976), An Equation for Continuous Chaos, Physics Letters, 57A (5): 3972013398,", "g — SprottA: A member of the Sprott family of algebraically-simple chaotic sytems. Sprott (1994). Some simple chaotic flows. Physical Review E (1994).", "Its own flow is chaotic: nearby particles separate at roughly e^0.26 per crossing of the attractor.", "The bracket was traced to closed form, printed as GLSL, and checked against autoLie's autograd bracket on the attractor (agreement to 8e-16). [g, f] is the same field reversed: the same curves, run backwards, so its attractors are this one's repellers."], "sources": ["https://github.com/williamgilpin/dysts", "https://github.com/virati/autoLie"]},
+    lie: {"lyapunov": 0.2597, "bounded": true, "autolieError": 7.61e-16},
+  },
+];
+
+Object.assign(__exports, { LIE_ATTRACTORS });
+
+});
+
+__def("palettes.js", function (__exports, __req) {
+// Colour schemes. `color1` → `color2` is the gradient across trajectories;
+// `border` is the ink that separates overlapping strands.
+
+const { hexToRgb } = __req('glutil.js');
+
+const raw = [
+  // --- dark ---------------------------------------------------------------
+  { name: 'Ink',        dark: true, bg: '#07090e', c1: '#2f6ad0', c2: '#8de2a7', border: '#02030a', grid: '#5f7fb8' },
+  { name: 'Ember',      dark: true, bg: '#0b0605', c1: '#a8204c', c2: '#ffb347', border: '#1a0503', grid: '#a8674a' },
+  { name: 'Viridian',   dark: true, bg: '#05100d', c1: '#12786f', c2: '#c8f169', border: '#01100c', grid: '#4fae8f' },
+  { name: 'Magenta Ice',dark: true, bg: '#0a0713', c1: '#6c2ecb', c2: '#ff85d8', border: '#05020d', grid: '#8a6bc9' },
+  { name: 'Copper',     dark: true, bg: '#0d0a07', c1: '#7d4520', c2: '#f0a868', border: '#170d05', grid: '#9c7550' },
+  { name: 'Cyanotype',  dark: true, bg: '#04101c', c1: '#1566ba', c2: '#9ee8ff', border: '#010a14', grid: '#4d8fc4' },
+  { name: 'Sodium',     dark: true, bg: '#0c0a04', c1: '#a8760a', c2: '#ffe9a8', border: '#150f02', grid: '#a08f55' },
+  { name: 'Absinthe',   dark: true, bg: '#080d06', c1: '#4c860e', c2: '#e8ff7a', border: '#040802', grid: '#7fa84f' },
+  { name: 'Deep Sea',   dark: true, bg: '#03080f', c1: '#12568f', c2: '#46d5c8', border: '#01050b', grid: '#3d7d9c' },
+  { name: 'Ultraviolet',dark: true, bg: '#07040f', c1: '#4a32d8', c2: '#c4a7ff', border: '#030109', grid: '#7060c0' },
+  { name: 'Rust Bloom', dark: true, bg: '#0f0709', c1: '#c04a2c', c2: '#ffd9a0', border: '#1c0806', grid: '#b0705e' },
+  { name: 'Aurora',     dark: true, bg: '#040a0c', c1: '#1a7ba6', c2: '#a7ffcf', border: '#010607', grid: '#48a0a8' },
+  // --- paper --------------------------------------------------------------
+  // Part 1 of the notebook: its two constants, on white, with a white rim
+  // that parts every crossing.
+  { name: 'Reusser',    dark: false, bg: '#ffffff', c1: '#8ce3a6', c2: '#1c51a6', border: '#ffffff', grid: '#000000' },
+  { name: 'Notebook',   dark: false, bg: '#ffffff', c1: '#2f6ad0', c2: '#8de2a7', border: '#492727', grid: '#000000' },
+  { name: 'Blueprint',  dark: false, bg: '#eef3fa', c1: '#123a73', c2: '#5fb0d8', border: '#12243d', grid: '#20406b' },
+  { name: 'Risograph',  dark: false, bg: '#f7f1e6', c1: '#d0245c', c2: '#2a4fc4', border: '#3a2018', grid: '#6b5a48' }
+];
+
+function mix(a, b, t) { return a.map((v, i) => v + (b[i] - v) * t); }
+
+const PALETTES = raw.map(p => {
+  const background = hexToRgb(p.bg);
+  const color1 = hexToRgb(p.c1);
+  const color2 = hexToRgb(p.c2);
+  return {
+    name: p.name,
+    dark: p.dark,
+    background,
+    color1,
+    color2,
+    borderColor: hexToRgb(p.border),
+    gridColor: hexToRgb(p.grid),
+    gridOpacity: p.dark ? 0.32 : 0.25,
+    // On dark grounds a literal shadow is invisible, so the floor catches a
+    // dim tint of the trails instead.
+    shadowColor: p.dark ? mix(background, color1, 0.42) : mix(background, [0, 0, 0], 0.09),
+    css: {
+      background: p.bg,
+      foreground: p.dark ? '#e8edf5' : '#1a1a1a',
+      accent: p.c2
+    }
+  };
+});
+
+// Black is free on an OLED: a pixel driven to zero draws no current, while the
+// near-blacks these palettes were designed around still light every pixel on the
+// panel. The background is almost the whole screen almost all of the time, so
+// dropping it to true black is the one change that matters for power.
+//
+// Paper palettes are returned untouched. Their ink is dark, so a black ground
+// would leave nothing visible — a light scheme cannot be made frugal, only
+// avoided, which is what the palette pool does by default.
+function oledSafe(palette) {
+  if (!palette.dark) return palette;
+  const background = [0, 0, 0];
+  return {
+    ...palette,
+    background,
+    shadowColor: mix(background, palette.color1, 0.42),
+    // The grid room is background too, and the largest lit area after the
+    // trails themselves, so it is dimmed rather than left alone.
+    gridOpacity: palette.gridOpacity * 0.55,
+    css: { ...palette.css, background: '#000000' }
+  };
+}
+
+const pick = (rng = Math.random, filter = () => true) => {
+  const pool = PALETTES.filter(filter);
+  return pool[Math.floor(rng() * pool.length)];
+};
+
+Object.assign(__exports, { PALETTES, oledSafe, pick });
+
+});
+
+__def("format.js", function (__exports, __req) {
+// Turns the GLSL derivative source into something readable under the title.
+
+function splitComponents(deriv) {
+  const parts = [];
+  let depth = 0, current = '';
+  for (const ch of deriv) {
+    if (ch === '(') depth++;
+    else if (ch === ')') depth--;
+    if (ch === ',' && depth === 0) { parts.push(current); current = ''; continue; }
+    current += ch;
+  }
+  parts.push(current);
+  return parts.map(p => p.replace(/\s+/g, ' ').trim()).filter(Boolean);
+}
+
+const SUPER = { 2: '²', 3: '³' };
+
+const GREEK = {
+  alpha: 'α', beta: 'β', gamma: 'γ', delta: 'δ', epsilon: 'ε', zeta: 'ζ',
+  eta: 'η', theta: 'θ', iota: 'ι', kappa: 'κ', lambda: 'λ', mu: 'μ', nu: 'ν',
+  xi: 'ξ', rho: 'ρ', sigma: 'σ', tau: 'τ', upsilon: 'υ', phi: 'φ', chi: 'χ',
+  psi: 'ψ', omega: 'ω'
+};
+
+const GREEK_RE = new RegExp(`\\b(${Object.keys(GREEK).join('|')})\\b`, 'g');
+
+const greek = s => s.replace(GREEK_RE, m => GREEK[m]);
+
+// Four significant figures is plenty; 2.6666666666666665 is not a parameter.
+const shortNumber = v => {
+  if (!Number.isFinite(v)) return String(v);
+  if (Number.isInteger(v)) return String(v);
+  return String(Number(v.toPrecision(4)));
+};
+
+function prettyExpression(src) {
+  let s = ' ' + src + ' ';
+  // Collapse repeated self-products into exponents, longest run first.
+  for (const v of ['x', 'y', 'z']) {
+    for (const n of [4, 3, 2]) {
+      const run = new RegExp(`\\b${v}(?:\\s*\\*\\s*${v}){${n - 1}}\\b`, 'g');
+      s = s.replace(run, v + (SUPER[n] || `^${n}`));
+    }
+  }
+  s = s.replace(/\s*\*\s*/g, ' ');
+  s = s.replace(/\s*\/\s*/g, ' / ');
+  s = s.replace(/\bpow\b/g, 'pow');
+  s = s.replace(/(\d)\.0\b/g, '$1');
+  s = s.replace(/\b1 (?=[a-zA-Zα-ω(])/g, '');
+  s = s.replace(/\s+/g, ' ').trim();
+  return greek(s);
+}
+
+function equations(attractor) {
+  const dots = ['ẋ', 'ẏ', 'ż'];
+  return splitComponents(attractor.deriv).slice(0, 3)
+    .map((part, i) => `${dots[i]} = ${prettyExpression(part)}`);
+}
+
+function parameterValues(params) {
+  if (!params) return '';
+  return Object.entries(params)
+    .map(([k, v]) => `${greek(k)} = ${shortNumber(v)}`)
+    .join('   ');
+}
+
+function parameterLine(attractor) {
+  return parameterValues(attractor.params);
+}
+
+function reference(attractor) {
+  const r = attractor.refs && attractor.refs[0];
+  if (!r) return '';
+  const who = r.authors ? r.authors.join(', ') + ' · ' : '';
+  return who + (r.title || '');
+}
+
+Object.assign(__exports, { splitComponents, greek, shortNumber, prettyExpression, equations, parameterValues, parameterLine, reference });
+
+});
+
+__def("history.js", function (__exports, __req) {
+// Background notes for each system: where it came from, what it was built to
+// describe, and what is worth knowing about its behaviour. Written from the
+// sources listed under each entry, which are the papers the attractor list
+// already cites plus encyclopaedia and review material found alongside them.
+//
+// `origin` is the one-line attribution shown under the title. `text` is two or
+// three paragraphs. `caveat`, where present, is shown in italics at the end and
+// says plainly that the attribution here is weaker than the rest — several of
+// these systems circulate in visualisation code under names that the primary
+// literature does not clearly confirm, and guessing would be worse than saying so.
+
+const HISTORY = {
+
+  "Lorenz": {
+    origin: "Edward Lorenz, 1963",
+    text: [
+      "Edward Lorenz published these three equations in 1963 as a drastically truncated model of atmospheric convection, building on Barry Saltzman's earlier work on heated fluid layers. Only three Fourier modes survive the truncation: x is the intensity of the convective motion, y the temperature difference between rising and falling currents, and z the departure of the vertical temperature profile from a straight line. The parameters carry the physics — sigma is the Prandtl number, rho the Rayleigh number, and beta the geometry of the fluid layer.",
+      "At Lorenz's values of sigma = 10, rho = 28 and beta = 8/3 the solution never settles. It winds around one lobe, crosses over, winds around the other, and the number of turns it takes on each side is not predictable from any finite observation. This was the point: a deterministic system with no noise in it whatsoever, whose long-range behaviour is nonetheless beyond forecasting. The phrase that stuck to it, the butterfly effect, describes both the sensitivity and, by coincidence, the shape.",
+      "The attractor has a Hausdorff dimension of about 2.06 — a sheet that is not quite a surface. That it exists at all as a genuine strange attractor, rather than a very long transient that numerics could not distinguish from one, remained unproven for four decades. Warwick Tucker settled it in 2002 with a computer-assisted proof using interval arithmetic, answering the fourteenth of Stephen Smale's problems for the century."
+    ],
+    sources: ["https://en.wikipedia.org/wiki/Lorenz_system"]
+  },
+
+  "Rössler": {
+    origin: "Otto Rössler, 1976",
+    text: [
+      "Otto Rössler designed this system in 1976 with an explicitly minimal brief: produce Lorenz-like chaos, but with as little machinery as possible. Two of the three equations are linear and the whole system carries a single quadratic term, which makes it far more tractable to analyse by hand than the Lorenz equations it was answering. Rössler's own parameters were a = 0.2, b = 0.2, c = 5.7.",
+      "The mechanism is easy to watch. In the x-y plane the orbit spirals slowly outward around an unstable fixed point; when x grows past c, the z equation fires, lifting the trajectory sharply out of the plane and dropping it back near the centre. Outward spiral, sharp fold, repeat — stretching and folding in its plainest form, the same operation as kneading dough, which is what makes nearby points separate while the set as a whole stays bounded.",
+      "Taking successive maxima of one coordinate collapses the flow to a one-dimensional map with a single hump, and that map period-doubles on the familiar route: period 1 near c = 4, then 2, then 4, then 8, then chaos interleaved with periodic windows. The attractor itself is a band joined to a Möbius strip, with Cantor-set structure across it. Though it began as a purely theoretical construction, the equations later turned out to describe kinetics in some chemical reactions."
+    ],
+    sources: ["https://en.wikipedia.org/wiki/R%C3%B6ssler_attractor"]
+  },
+
+  "Thomas": {
+    origin: "René Thomas, 1999",
+    text: [
+      "René Thomas introduced this flow in 1999 in work on describing deterministic chaos in the language of feedback circuits. The three equations are cyclically symmetric: each is the same formula with x, y and z rotated by one position, so no axis is privileged and the whole picture is invariant under a 120-degree turn about the diagonal. The nonlinearity is a sine, which gives the system infinitely many fixed points arranged on a three-dimensional lattice.",
+      "Thomas read it as a damped particle drifting through that lattice of forces, and the single parameter b is the damping. It is also a complete bifurcation parameter. Above b = 1 the origin is the only stable state. At b = 1 a pitchfork bifurcation splits off two attracting points; near b = 0.32899 a Hopf bifurcation produces a limit cycle; and near b = 0.208186 a period-doubling cascade tips the system into chaos, with the attractor swelling as b falls further.",
+      "At b = 0 the damping vanishes entirely and the system becomes conservative. The trajectory then stops being confined to an attractor at all and wanders ergodically through the whole lattice, spreading in a way that resembles deterministic fractional Brownian motion. Few systems this compact span the conservative and dissipative regimes on a single dial."
+    ],
+    sources: ["https://en.wikipedia.org/wiki/Thomas%27_cyclically_symmetric_attractor"]
+  },
+
+  "Chen": {
+    origin: "Guanrong Chen and Tetsushi Ueta, 1999",
+    text: [
+      "Guanrong Chen and Tetsushi Ueta published this double-scroll system in 1999. It looks like a near relative of Lorenz — same shape of quadratic coupling, same two-lobed silhouette — and that resemblance is the interesting part, because in a precise sense it is the opposite of Lorenz rather than a variant of it.",
+      "Vaněček and Čelikovský had classified this family by the sign of the product a12·a21 in the linear part of the vector field. The Lorenz system sits in the branch where that product is positive. Chen's system satisfies a12·a21 < 0, which places it in a different equivalence class: not reachable from Lorenz by any smooth change of coordinates, despite the family likeness on screen. Chen's system is in this sense the dual of Lorenz's.",
+      "Commonly quoted parameters are a = 40, c = 28, b = 3. The system became one of the most heavily worked examples in the applied chaos literature of the 2000s, largely because its two scrolls and comparatively wide chaotic parameter range make it convenient for circuit realisation and for synchronisation experiments."
+    ],
+    sources: ["https://en.wikipedia.org/wiki/Multiscroll_attractor", "https://www.worldscientific.com/doi/abs/10.1142/S0218127402005467"]
+  },
+
+  "Lü-Chen": {
+    origin: "Jinhu Lü and Guanrong Chen, 2002",
+    text: [
+      "Jinhu Lü and Guanrong Chen constructed this system as the missing middle term between Lorenz and Chen. Under the Vaněček-Čelikovský classification by the sign of a12·a21, Lorenz occupies the positive branch and Chen the negative one; the Lü system is built to sit exactly at a12·a21 = 0, on the boundary between them.",
+      "That makes it a bridge rather than another entry in the catalogue. Sweeping the relevant parameter carries the attractor continuously from Lorenz-like to Chen-like behaviour, passing through the degenerate case in between, so the two classes can be studied as endpoints of one family instead of as separate objects.",
+      "The extended form adds a constant u to the second equation, which breaks the symmetry and lets the system generate multiscroll attractors; a = 36, c = 20, b = 3 and u = -15.15 is a standard setting. It is the same design logic as the rest of this group: rather than search for new chaos, take the structure of a known system and move it deliberately across a classification boundary."
+    ],
+    sources: ["https://en.wikipedia.org/wiki/Multiscroll_attractor", "https://www.researchgate.net/publication/220264958_BRIDGE_THE_GAP_BETWEEN_THE_LORENZ_SYSTEM_AND_THE_CHEN_SYSTEM"]
+  },
+
+  "Chen-Celikovsky": {
+    origin: "Sergej Čelikovský and Guanrong Chen, after Vaněček and Čelikovský",
+    text: [
+      "This system comes out of the classification programme rather than from any physical problem. Antonín Vaněček and Sergej Čelikovský proposed a generalised Lorenz canonical form — a normal form into which a whole family of quadratic chaotic systems can be transformed — and then sorted the family by the sign of the product a12·a21 taken from the linear part.",
+      "The point of a canonical form is that it turns a growing list of separately named attractors into a parameterised family with structure. Systems that merely look alike can be told apart, and systems that look different can turn out to be the same one in disguise. The Lorenz system, the generalised Lorenz systems, and the Chen system all appear as special cases of the one canonical form.",
+      "The variant carried here sits in the Chen branch of that classification. Its interest is less in the picture it draws than in what it demonstrates: that these attractors are not a bestiary of unrelated curiosities but points in a single classified space, with the boundaries between classes doing real mathematical work."
+    ],
+    sources: ["https://www.worldscientific.com/doi/abs/10.1142/S0218127402005467", "https://www.sciencedirect.com/science/article/abs/pii/S0960077905001931"]
+  },
+
+  "Chen-Lee": {
+    origin: "Hsien-Keng Chen and Ching-I Lee, 2004",
+    text: [
+      "Unlike most systems in this collection, the Chen-Lee equations were not assembled to produce chaos — they are the equations of motion of a real mechanical object. They are Euler's rigid-body equations for a gyroscope, with linear feedback control added, and they govern gyro motion directly rather than approximating it.",
+      "That distinction matters. The Lorenz system is a severe truncation of convection, three modes standing in for a fluid; the Chen-Lee system is the governing set of equations for the motion it describes. Chaos here is a property of the controlled gyroscope itself, not an artefact of a modelling shortcut, which makes the system a cleaner test case for whether chaos in a control loop is physically real.",
+      "The flow produces a two-scroll attractor. Later work extended it in the usual directions — fractional-order versions, hyperchaos induced by sinusoidal perturbation, control and chaotification through multiple time delays — with the alternative implementation of Sheu, Tam, Chen and Lao (2009) among the more cited follow-ups."
+    ],
+    sources: ["https://www.sciencedirect.com/science/article/abs/pii/S0960077908003524", "https://www.sciencedirect.com/science/article/abs/pii/S0960077906009295"]
+  },
+
+  "Duffing": {
+    origin: "Georg Duffing, 1918",
+    text: [
+      "Georg Duffing (1861-1944) published the equation that carries his name in 1918, in a monograph on forced oscillation with variable natural frequency and its engineering significance. It is the oscillator every undergraduate meets, plus one term: a cubic in the restoring force. That single addition is the difference between a spring that obeys Hooke's law and every real spring.",
+      "Written as ẍ + δẋ + αx + βx³ = γcos(ωt), the parameters divide cleanly — δ damps, α sets the linear stiffness, β sets how far the restoring force departs from linear, and γ and ω describe the driving. Positive β stiffens the spring as it stretches, negative β softens it. With α negative the potential has two wells, and the equation becomes the standard model of a buckled beam flipping between two bent states.",
+      "The nonlinearity bends the frequency-response curve over on itself, so that over a band of driving frequencies three amplitudes are possible at once. Sweeping the frequency up and then down traces different paths and the amplitude jumps discontinuously at the turning points: the jump phenomenon, complete with hysteresis. Push the forcing harder and the response period-doubles its way into chaos. Duffing's equation is, among all the systems here, the one most likely to be describing something on your desk."
+    ],
+    sources: ["https://en.wikipedia.org/wiki/Duffing_equation"]
+  },
+
+  "Rabinovich-Fabrikant": {
+    origin: "Mikhail Rabinovich and Anatoly Fabrikant, 1979",
+    text: [
+      "Mikhail Rabinovich and Anatoly Fabrikant derived these equations in 1979 to describe the stochastic self-modulation of waves in non-equilibrium dissipative media. The physical setting is a medium held away from equilibrium in which a wave, rather than propagating steadily, modulates itself into irregular behaviour. The parameter α measures the dissipation and γ the pumping that sustains the wave.",
+      "The system is unusually nonlinear for a three-variable flow: it carries both quadratic and cubic terms, and it has five hyperbolic equilibria — one at the origin and four more whose existence depends on α and γ. At the standard chaotic setting γ = 0.87, α = 1.1 the correlation dimension is about 2.19 and the Lyapunov spectrum is roughly (0.198, 0, -0.658).",
+      "It is also, by reputation, the hardest system in the standard catalogue to integrate honestly. Identical parameters and identical initial conditions run through different solvers — MATLAB against Mathematica — have produced visibly different trajectories. For a chaotic system that is expected in detail, but the scale of the divergence here makes it a standing warning about how much of a published phase portrait is the system and how much is the integrator."
+    ],
+    sources: ["https://en.wikipedia.org/wiki/Rabinovich%E2%80%93Fabrikant_equations"]
+  },
+
+  "Nosé-Hoover": {
+    origin: "Shuichi Nosé, 1984; William Hoover, 1985",
+    text: [
+      "This flow comes from molecular dynamics rather than from chaos theory. Shuichi Nosé published the method in 1984 and William Hoover recast it in 1985. The problem it solves is that simulations naturally conserve energy, while laboratory experiments hold temperature fixed — so a simulation run as written samples the wrong statistical ensemble.",
+      "Nosé's device was to add a degree of freedom: an extra variable coupled to the system's kinetic energy, acting as a heat bath made from a single fictitious particle. It behaves as a friction that can run in either direction, draining energy when the system is too hot and feeding it back when too cold. The resulting dynamics is fully deterministic, with no random forces, yet it samples the canonical NVT ensemble. A parameter Q sets how quickly the thermostat responds, and choosing it badly gives either ineffective thermostatting or spurious temperature oscillations.",
+      "The catch, discovered soon after, is ergodicity. For a single harmonic oscillator the Nosé-Hoover thermostat does not generate a canonical distribution at all — the trajectory is chaotic but explores only part of the phase space it is supposed to cover. That failure prompted the Nosé-Hoover chains and the other refinements now in standard use, and it is why this small system is studied as a dynamical object in its own right."
+    ],
+    sources: ["https://en.wikipedia.org/wiki/Nos%C3%A9%E2%80%93Hoover_thermostat"]
+  },
+
+  "Rucklidge": {
+    origin: "Alastair Rucklidge, 1992",
+    text: [
+      "Alastair Rucklidge derived this system in 1992 in Chaos in models of double convection (Journal of Fluid Mechanics 237, 209-229). Double convection is convection with a second competing effect — a dissolved solute, an imposed magnetic field, or rotation — and the paper gives a unified derivation of third-order models for two-dimensional convection in a Boussinesq layer with lateral constraints.",
+      "In the limit of tall thin rolls, two physically distinct problems — convection in an imposed vertical magnetic field, and convection in a uniformly rotating layer — reduce to the same third-order set of equations. Its chaotic solutions are born in a homoclinic explosion, the same mechanism that produces chaos in the Lorenz equations.",
+      "What sets it apart from Lorenz is honesty about its own validity. The Lorenz equations are a severe truncation, and the parameter values at which they go chaotic are far outside the range where the truncation can be justified. Rucklidge's derivation is asymptotically exact in the regime where the chaotic solutions actually appear, so the chaos it shows is chaos of the fluid problem rather than of the approximation."
+    ],
+    sources: ["https://www.cambridge.org/core/journals/journal-of-fluid-mechanics/article/abs/chaos-in-models-of-double-convection/29A1D82111941E50EE0D4A31DF09BE1D", "https://eprints.whiterose.ac.uk/id/eprint/974/"]
+  },
+
+  "Lorenz 1984": {
+    origin: "Edward Lorenz, 1984",
+    text: [
+      "Twenty-one years after the convection model, Lorenz returned with a different three-equation system, published in Tellus in 1984 under the title Irregularity: a fundamental property of the atmosphere. Where the 1963 model describes a slab of fluid, this one is a minimal model of the global circulation: x is the strength of the westerly current, y and z the cosine and sine phases of the travelling waves that carry heat poleward.",
+      "Two forcing terms, F and G, stand for the thermal contrast that drives the circulation — F for the symmetric equator-to-pole contrast, G for the asymmetric land-sea contrast. Depending on how hard they push, the equations admit one or two stable steady states, one or two stable periodic solutions, or aperiodic solutions. Weather regimes, an annual cycle and irregular interannual variability all appear in the same three equations as different parameter regimes.",
+      "The argument in the title is the point of the paper. Irregularity in the atmosphere is not noise added to an otherwise orderly circulation, nor a sign that the model is missing physics; it is a property of the circulation itself, present in a system with three variables and no stochastic forcing anywhere in it. The model is still used as a testbed for predictability and for data assimilation schemes."
+    ],
+    sources: ["https://onlinelibrary.wiley.com/doi/10.1111/j.1600-0870.1984.tb00230.x", "http://www.atomosyd.net/spip.php?article42"]
+  },
+
+  "Hadley": {
+    origin: "Named for the Hadley circulation; low-dimensional form after Lorenz",
+    text: [
+      "The Hadley cells are the largest overturning structure in the atmosphere: air rises near the equator at the intertropical convergence zone, moves poleward aloft, and descends in the subtropics, carrying moisture in and exporting energy and angular momentum out. This system is a three-variable caricature of that circulation, of the same lineage as Lorenz's 1984 model.",
+      "The variables track the strength of the globally averaged symmetric westerly current and the cosine and sine phases of travelling waves transporting heat poleward, with forcing terms F and G standing in for the heating contrast. The nonlinear energy-exchange terms between them are what make the low-dimensional dynamics rich enough to be interesting.",
+      "The behaviour as the equator-to-pole temperature difference is turned up follows a recognisable sequence: a stationary Hadley equilibrium first, then a periodic regime, and finally evolution on a strange attractor. That a climate model this small reproduces the transition at all is the reason these minimal circulation models remain in use as benchmarks for forecasting and data-driven modelling."
+    ],
+    sources: ["https://arxiv.org/pdf/2110.05266", "https://nyaspubs.onlinelibrary.wiley.com/doi/full/10.1111/nyas.15114"],
+    caveat: "Attribution to a single originating paper is not firmly established; the low-dimensional Hadley model is generally traced to Lorenz's work on global circulation in the early 1980s."
+  },
+
+  "Aizawa": {
+    origin: "William F. Langford, 1984",
+    text: [
+      "The system almost universally labelled the Aizawa attractor is more accurately Langford's. It first appeared in W. F. Langford's Numerical studies of torus bifurcations, in the proceedings of a 1983 Dortmund meeting published by Birkhäuser in 1984. The name in circulation among visualisation tools has drifted from the citation.",
+      "The equations are a normal form, not a model of anything: they describe what happens when a Hopf bifurcation and a hysteresis bifurcation of stationary states interact — a Hopf-zero singularity unfolded in two parameters. Langford showed that under axisymmetric perturbations the flow produces an attracting invariant torus. Normal forms of this kind matter because whole classes of systems reduce to them near such a degeneracy, so one calculation covers many models.",
+      "Breaking the axial symmetry is what makes the picture interesting. Non-axisymmetric perturbations bring phase locking, period doubling, bistability and strange attractors, with fractal basin boundaries between the coexisting states. The sphere-with-a-spike silhouette the system is admired for is the torus of the symmetric case with the symmetry broken."
+    ],
+    sources: ["https://link.springer.com/chapter/10.1007/978-3-0348-6256-1_19", "https://link.springer.com/article/10.1134/S199508022305058X"]
+  },
+
+  "Halvorsen": {
+    origin: "Arne Dehli Halvorsen, circulated on sci.fractals",
+    text: [
+      "The Halvorsen attractor has an unusual provenance: Arne Dehli Halvorsen proposed it on the sci.fractals newsgroup rather than in a journal, and it reached the literature largely through J. C. Sprott at the University of Wisconsin, who collected and catalogued systems of this kind.",
+      "Its organising principle is cyclic symmetry. The three equations are the same expression with x, y and z rotated by one place, so the flow is unchanged by a cyclic relabelling of the axes and the attractor is invariant under a 120-degree rotation about the main diagonal. The three curled lobes in the picture are not three separate features; they are one feature seen three times.",
+      "It belongs to a small family that includes René Thomas's system, which imposes the same symmetry with an even simpler form — a linear damping plus a nonlinear function of the next variable round the cycle. Choosing a sine there gives infinitely many fixed points on a lattice; Halvorsen's quadratic choice gives this compact, tightly wound shape instead."
+    ],
+    sources: ["https://sprott.physics.wisc.edu/chaos/symmetry.htm", "https://en.wikipedia.org/wiki/Thomas%27_cyclically_symmetric_attractor"]
+  },
+
+  "Newton-Leipnik": {
+    origin: "Roy Leipnik and T. A. Newton, 1981",
+    text: [
+      "Roy Leipnik and T. A. Newton published these equations in 1981 in a paper on double strange attractors in rigid body motion with linear feedback control. The starting point is Euler's equations for a rotating rigid body — classical mechanics, entirely well behaved — to which a linear feedback term is added. For suitable feedback gains the result is a system of three quadratic differential equations with two strange attractors.",
+      "The plural is the point. The system does not have one attractor that trajectories find from anywhere; it has two coexisting ones, and which of them an orbit ends up on is decided by where it started. The phase space is divided into two basins, and in systems of this type the boundary between them is generally fractal, so arbitrarily small differences in the initial state can send trajectories to different long-run behaviours.",
+      "Wang and Tian later attached the Newton-Leipnik name to the system, and it became a standard test case for chaos control and synchronisation — partly because controlling a system with coexisting attractors means choosing between them, not merely suppressing chaos. Fractional-order variants have been studied extensively since."
+    ],
+    sources: ["https://www.sciencedirect.com/science/article/abs/pii/0375960181901651", "https://arxiv.org/pdf/nlin/0501014"]
+  },
+
+  "Genesio-Tesi": {
+    origin: "Roberto Genesio and Alberto Tesi, 1992",
+    text: [
+      "Roberto Genesio and Alberto Tesi arrived at this system in 1992 from the control-theory side, while looking for algebraic conditions that would predict chaos rather than merely confirm it after the fact. Their tool was harmonic balance — approximate a system's response by its leading sinusoidal components and ask when that approximation breaks down in a way that signals chaos.",
+      "What falls out is the canonical jerk equation, x⃛ + aẍ + bẋ + x(1 + x) = 0, written as a three-dimensional system. Jerk is the derivative of acceleration, and a jerk equation is the shortest honest way to write a third-order scalar ODE as a flow: the first two equations simply pass the derivative along, and all the dynamics lives in the third. The nonlinearity here is a single quadratic term.",
+      "The parameters a and b are the bifurcation parameters, and the system has exactly two equilibria — one at the origin, one at (-1, 0, 0). Its later career has been mostly in fractional-order form, in synchronisation studies and in weak-signal detection, where a chaotic system poised near a bifurcation is used as an amplifier for signals buried in noise."
+    ],
+    sources: ["http://www.atomosyd.net/spip.php?article153", "https://www.mdpi.com/2504-3110/9/2/74"]
+  },
+
+  "Arneodo": {
+    origin: "Alain Arneodo, Pierre Coullet and Charles Tresser, 1981",
+    text: [
+      "Alain Arneodo, Pierre Coullet and Charles Tresser proposed this system in Possible new strange attractors with spiral structure (Communications in Mathematical Physics, 1981), following their 1979 work with Tresser on the transition to stochasticity in forced oscillators. The attractor list here cites their 1982 paper applying the same structure to Volterra equations for competing species.",
+      "The form is a jerk equation: ẋ = y, ẏ = z, and all the content in the third equation, where a cubic nonlinearity sits alongside linear terms. Writing chaos in this shape makes it clear how little is needed — a single scalar third-order ODE with one nonlinear term, with the first two equations doing nothing but relaying derivatives.",
+      "Its importance is that it exhibits Shilnikov chaos explicitly. Shilnikov's theorem says that a homoclinic orbit to a saddle-focus, under a condition on the eigenvalues, forces infinitely many periodic orbits and chaotic dynamics nearby. Systems where that orbit can actually be located are valuable because the chaos is then proved rather than observed, and the spiral structure in the phase portrait is the saddle-focus at work."
+    ],
+    sources: ["https://link.springer.com/article/10.1007/BF01011745", "https://link.springer.com/article/10.1007/BF01832841"]
+  },
+
+  "Coullet": {
+    origin: "Pierre Coullet, Charles Tresser and Alain Arneodo, 1979-1981",
+    text: [
+      "This system comes from the same Nice group and the same programme as the Arneodo equations: Coullet, Tresser and Arneodo's Transition to stochasticity for a class of forced oscillators (Physics Letters A, 1979) and the spiral-structure paper that followed in 1981. The two systems are close relatives, differing in the placement and degree of the nonlinear terms.",
+      "Like the Arneodo system it is written in jerk form, with a cubic nonlinearity carrying the dynamics. The group's concern was not to collect attractors but to understand the routes by which ordinary oscillators become chaotic, and to tie those routes to structures — homoclinic orbits to a saddle-focus — that could be identified and reasoned about rather than merely plotted.",
+      "Coullet and Tresser are also the authors, independently of Feigenbaum, of the renormalisation theory of period doubling, which explains why the doubling cascade has universal constants across systems that share nothing else. The same instinct runs through this system: find the structure that makes the behaviour inevitable, rather than catalogue the behaviour."
+    ],
+    sources: ["https://link.springer.com/article/10.1007/BF01011745", "https://en.wikipedia.org/wiki/Chaos_theory"]
+  },
+
+  "Anishchenko-Astakhov": {
+    origin: "Vadim Anishchenko and Vladimir Astakhov, 1983",
+    text: [
+      "The Anishchenko-Astakhov oscillator is a radiophysical generator rather than an abstraction — the equations are derived from an actual radio-technical circuit, built so that the conditions for chaotic self-sustained oscillation are met. It dates from 1983, and Anishchenko's 1986 doctoral thesis on chaos in radiophysical systems with finitely many degrees of freedom was the first work in the Soviet Union devoted entirely to dynamical chaos.",
+      "A self-sustained oscillator is one that produces oscillation from a steady energy source, with no periodic driving: the timing comes from the system, not from outside. Making such an oscillator chaotic rather than periodic is a design problem, and the underlying reason it can be done here is the presence of a homoclinic trajectory in the form of a saddle-focus separatrix loop — the Shilnikov mechanism, arrived at through circuit design rather than through analysis.",
+      "Because it exists as hardware, the oscillator became the setting for experiments that would be hard to argue for in simulation alone. Chaos synchronisation — the locking of the basic frequency of a chaotic oscillation to an external drive — was demonstrated experimentally for the first time on a harmonically driven Anishchenko-Astakhov generator."
+    ],
+    sources: ["https://fizika.sgu.ru/en/articles/anishchenko-astakhov-self-sustained-oscillator-as-one-of-the-basic-models-of-deterministic", "https://link.springer.com/chapter/10.1007/978-3-319-06871-8_11"]
+  },
+
+  "Burke-Shaw": {
+    origin: "Robert Shaw, 1981, with Bill Burke",
+    text: [
+      "Robert Shaw's Strange Attractors, Chaotic Behavior, and Information Flow (Zeitschrift für Naturforschung A 36, 80-112, 1981) is one of the founding papers of the information-theoretic view of chaos. Shaw's question was not what the attractor looks like but how much information it produces: a chaotic system generates new information at a definite rate, because digits that were below the resolution of any measurement are continuously promoted into significance.",
+      "The system named for Shaw and his Santa Cruz colleague Bill Burke is Lorenz-like and, like Lorenz, equivariant under a rotation symmetry — the flow commutes with a half-turn about an axis, which is why the attractor comes in two mirrored lobes. Near its standard parameters it shows the attractor that recurs across Lorenz-like systems generally.",
+      "Shaw's framing in that paper — that the observed geometry of strange attractors follows from a rule permitting trajectories to join but never to split — was an early attempt at classifying three-dimensional strange attractors by structure rather than by appearance, and it anticipated the template and branched-manifold methods that came later."
+    ],
+    sources: ["https://degruyter.com/view/journals/zna/36/1/article-p80.xml?language=en", "http://www.atomosyd.net/spip.php?article33"]
+  },
+
+  "Bouali": {
+    origin: "Safieddine Bouali, 2013",
+    text: [
+      "Safieddine Bouali is an economist at the University of Tunis, and his chaotic systems were built as heuristic models of economic cycles — in particular of capital flight from less developed countries. The system here comes from A 3D Strange Attractor with a Distinctive Silhouette: The Butterfly Effect Revisited (2013), and derives from the coupling-induced complexity of the Lotka-Volterra oscillator, the classic predator-prey model.",
+      "The attractor is a double scroll bridged by a loop, and varying a single parameter deforms it into a single scroll with a long stretched loop. The silhouette of the title is not decoration: Bouali's argument is that the shape is topologically unlike the standard catalogue of attractors, not another rendering of a Lorenz-like object.",
+      "The subtitle's claim is the sharper one. Bouali reports that varying the initial conditions leads not merely to different trajectories on one attractor but to different attractors, and to a regime of overlapped attractors coexisting in the same region of phase space. Sensitive dependence on initial conditions in Lorenz's sense concerns trajectories; this is sensitivity in which attractor you end up on at all."
+    ],
+    sources: ["https://arxiv.org/abs/1311.6128", "https://arxiv.org/pdf/1204.0045"]
+  },
+
+  "Bouali 2": {
+    origin: "Safieddine Bouali, 2012-2013",
+    text: [
+      "The second Bouali system is from the same programme of using three-variable flows as heuristic models of economic cycles, and shares the first system's ancestry in the Lotka-Volterra oscillator. Where the first emphasises a double scroll bridged by a loop, this variant is associated with A Novel Strange Attractor with a Stretched Loop (2012), in which a single parameter stretches the loop out.",
+      "The economic reading is deliberate but loose. The variables are not measured quantities; the model is an argument that the qualitative features of cycles — recurrence without periodicity, abrupt regime change, sensitivity to starting conditions — arise from coupling alone, and need neither external shocks nor stochastic terms to appear.",
+      "For the purposes of a screensaver the provenance matters less than the geometry: a stretched loop joining the scrolls gives it a silhouette quite unlike the Lorenz family, which is precisely what Bouali set out to produce."
+    ],
+    sources: ["https://arxiv.org/abs/1204.0045", "https://arxiv.org/abs/1311.6128"]
+  },
+
+  "Qi-Chen": {
+    origin: "Guanrong Qi, Guanrong Chen, Shengzhi Du, Zengqiang Chen and Zhuzhi Yuan, 2005",
+    text: [
+      "Published as Analysis of a new chaotic system in Physica A 352 (2005), this system was obtained by modifying a hybrid optical system into a three-dimensional continuous quadratic autonomous flow. Its structural signature is that every equation carries a single quadratic cross-product term — a different arrangement from Lorenz, Rössler, Chen or Lü, all of which distribute their nonlinearity differently.",
+      "The system has five equilibria, and the bifurcation analysis walks through a long sequence of regimes as parameters move: two coexisting sinks, then two coexisting periodic orbits, then two coexisting single-wing chaotic attractors, then double-wing attractors along the major and minor diagonals, and finally a four-wing attractor.",
+      "That progression is the reason the paper is cited so heavily. A four-wing attractor is not a decorative variation on the two-lobed butterfly; it is what two coexisting single-wing attractors become when they merge, and this system lets the merging be followed step by step rather than asserted. The Qi four-wing system has since been extended to eight-wing forms."
+    ],
+    sources: ["https://www.academia.edu/10985120/Analysis_of_a_new_chaotic_system", "https://link.springer.com/article/10.1007/s11071-016-2949-0"]
+  },
+
+  "Four-wing": {
+    origin: "Four-wing quadratic system, after Z. Wang and colleagues",
+    text: [
+      "Four-wing attractors are the subject of a substantial literature of their own. The two-lobed butterfly of Lorenz has a pair of wings because the flow winds around two unstable equilibria; a four-wing attractor requires enough equilibria, arranged the right way, for the trajectory to visit four such regions in one connected set, and constructing quadratic systems that do this reliably took some searching.",
+      "The system here has the form ẋ = ax + cyz, ẏ = bx + dy − xz, ż = ez + fxy, at a = 0.2, b = −0.01, c = 1, d = −0.4, e = −1, f = −1 — a setting analysed by Z. Wang and colleagues. Each equation carries exactly one quadratic cross-product, and the four wings appear over a wide parameter range rather than at an isolated point, which is what makes the system useful rather than merely curious.",
+      "Worth noting: in this collection the entry named Wang-Sun carries exactly the same equations at exactly the same parameter values. The two are one system under two names, which is a common hazard in attractor catalogues, where systems travel between visualisation tools faster than their citations do."
+    ],
+    sources: ["https://link.springer.com/article/10.1007/s11071-009-9607-8", "https://www.sbfisica.org.br/bjp/files/v39_547.pdf"],
+    caveat: "The name attached to this parameter set varies across sources; the underlying four-wing quadratic form is well documented, the label less so."
+  },
+
+  "Wang-Sun": {
+    origin: "Four-wing quadratic system, after Z. Wang and colleagues",
+    text: [
+      "The Wang-Sun name is attached in the visualisation literature to a four-wing quadratic system of the form ẋ = ax + cyz, ẏ = bx + dy − xz, ż = ez + fxy. Zenghui Wang and Yanxia Sun published together in the early 2010s on chaotic and hyperchaotic systems characterised by their equilibrium structure, including a four-dimensional system with no equilibria at all (Nonlinear Dynamics 69, 531-537, 2012).",
+      "Classifying these systems by their equilibria is not bookkeeping. An attractor whose basin does not touch any unstable equilibrium is called hidden, and hidden attractors cannot be found by the standard method of perturbing an equilibrium and following the trajectory — you have to know where to look. A system with no equilibria at all has only hidden attractors, which is why the no-equilibrium cases drew attention.",
+      "In this collection the equations filed under Wang-Sun are identical, parameter for parameter, to those filed under Four-wing. They are the same system entered twice, and the duplication is worth knowing about when comparing the two on screen."
+    ],
+    sources: ["https://link.springer.com/article/10.1007/s11071-011-0284-z", "https://link.springer.com/article/10.1007/s11071-009-9607-8"],
+    caveat: "The attachment of the Wang-Sun name to this specific parameter set is not confirmed in a primary source; the equations are the well-documented four-wing quadratic form."
+  },
+
+  "Yu-Wang": {
+    origin: "Yu and Wang, 2012",
+    text: [
+      "The Yu-Wang system is unusual in this company for its nonlinearity: where almost every other entry here is quadratic, the third equation carries an exponential, exp(xy). Quadratic terms are the natural output of truncating a physical model; an exponential is a deliberate choice, and it gives the system a much steeper response as the product xy grows.",
+      "Reported by Yu and Wang in 2012, the system generates a four-wing chaotic attractor, and does so in any orientation — the four wings can be produced along all three-dimensional directions and in the two-dimensional coordinate planes, rather than being locked to one set of axes.",
+      "Later analysis found rich multistability: coexisting chaotic attractors, coexisting stable nodes and coexisting limit cycles, depending on parameters and initial conditions, together with transient one-wing and two-wing chaos and offset boosting — a translation of the attractor through phase space driven by a single parameter. It has been implemented on FPGA hardware, where the exponential is the expensive part."
+    ],
+    sources: ["https://www.researchgate.net/publication/343972893_Multistability_Analysis_Coexisting_Multiple_Attractors_and_FPGA_Implementation_of_Yu-Wang_Four-Wing_Chaotic_System"],
+    caveat: "The 2012 Yu and Wang attribution comes from secondary literature on the system rather than from the original paper, which was not retrieved."
+  },
+
+  "Dadras": {
+    origin: "Sara Dadras and Hamid Reza Momeni, 2009",
+    text: [
+      "Sara Dadras and Hamid Reza Momeni published this system in Physics Letters A in September 2009, under a title that states its selling point plainly: a novel three-dimensional autonomous chaotic system generating two, three and four-scroll attractors.",
+      "The number of scrolls is controlled by a single parameter. Most systems in the catalogue produce one characteristic shape and require a different system to produce another; here two-, three- and four-scroll attractors are regimes of the same equations, reachable by turning one dial. That makes the transitions between them observable rather than inferential.",
+      "The authors worked through the standard battery — phase portraits and time histories, Poincaré maps, bifurcation diagrams and Lyapunov exponents — to establish that the multi-scroll regimes are genuinely chaotic rather than long-period. The system has since been extended to hyperchaotic form and used as a control-theory test case under the name Dadras-Momeni."
+    ],
+    sources: ["https://www.sciencedirect.com/science/article/abs/pii/S0375960109009591", "https://www.researchgate.net/publication/274511798_The_chaotic_Dadras-Momeni_system_Control_and_hyperchaotification"]
+  },
+
+  "Finance": {
+    origin: "Junhai Ma and Yushu Chen, 2001",
+    text: [
+      "The three variables here are economic quantities: x is the interest rate, y the investment demand and z the price index. Junhai Ma and Yushu Chen published the model in 2001 in a study of the bifurcation structure and global behaviour of a nonlinear finance system, with the saving amount, the elasticity of demand and the cost per investment entering as parameters.",
+      "The claim the model makes is specific. Financial time series are irregular, and the conventional explanation is that they are driven by external shocks — news, policy, weather. This system has no shocks in it. Its irregularity comes from the coupling between interest rate, investment demand and price index alone, which is an argument that some part of observed financial volatility may be endogenous.",
+      "The system carries coexisting equilibria, periodic orbits, Hopf bifurcations and chaotic attractors, and has become the standard starting point for a large body of work on chaotic financial models: fractional-order versions, time-delayed feedback control, hyperchaotic four-dimensional extensions, and control strategies aimed at stabilising the chaotic regime."
+    ],
+    sources: ["https://www.researchgate.net/publication/228929943_A_new_finance_chaotic_attractor", "https://link.springer.com/article/10.1007/s11071-014-1749-7"]
+  },
+
+  "TSUCS1": {
+    origin: "Lin Pan, Wuneng Zhou, Jian'an Fang and Dequan Li, 2010",
+    text: [
+      "TSUCS stands for Three-Scroll Unified Chaotic System. It was introduced by Lin Pan, Wuneng Zhou, Jian'an Fang and Dequan Li around 2010, following Dequan Li's three-scroll attractor in Physics Letters A 372 (2008), 387-393.",
+      "The word unified is the claim. The system is built so that Lorenz-like and Chen-like attractors both appear as limiting cases within its own parameter space, with the three-scroll regime living between them. Rather than adding one more attractor to the catalogue, it provides a single family in which two of the standard ones are endpoints of a continuous sweep.",
+      "Three scrolls sits awkwardly between the familiar counts. Two-scroll attractors arise from a symmetric pair of unstable equilibria, and four-scroll ones from two such pairs; three requires the symmetry to be broken in a particular way. The system has been used for synchronisation work, including active pinning control of its hyperchaotic extension."
+    ],
+    sources: ["https://www.semanticscholar.org/paper/A-New-Three-Scroll-Unified-Chaotic-System-Coined-Pan-Zhou/24e0f03058fbc8f8071b0fb0372afd3046f7c453", "https://www.semanticscholar.org/paper/A-three-scroll-chaotic-attractor-Li/dbeb673b0a2542d75e26a18a095672f917176398"]
+  },
+
+  "TSUCS2": {
+    origin: "Second form of the Three-Scroll Unified Chaotic System, after Dequan Li, 2008",
+    text: [
+      "TSUCS2 is the second parameterisation of the Three-Scroll Unified Chaotic System, sharing its lineage with TSUCS1 in Dequan Li's three-scroll attractor (Physics Letters A 372, 2008, 387-393) and the unified system that followed.",
+      "The two forms differ in how the quadratic terms are weighted rather than in kind, and the visible consequence is a markedly different silhouette: where TSUCS1 reads as three lobes of comparable size, TSUCS2 draws a longer, more drawn-out shape. Both retain the property that gives the family its name — Lorenz-like behaviour at one extreme of the parameter space and Chen-like behaviour at the other.",
+      "Systems of this kind exist mainly to make the structure of the catalogue visible. If Lorenz and Chen can be connected by a continuous path through parameter space, then the boundary between them is a feature of the family rather than of either system, and the three-scroll regime found along the way is what that boundary looks like."
+    ],
+    sources: ["https://www.semanticscholar.org/paper/A-three-scroll-chaotic-attractor-Li/dbeb673b0a2542d75e26a18a095672f917176398", "https://rreusser.github.io/demos/plots/tsucs2.html"]
+  },
+
+  "Liu-Chen": {
+    origin: "Liu and Chen, 2004",
+    text: [
+      "Liu and Chen asked a sharply posed question in the International Journal of Bifurcation and Chaos in 2004: can a three-dimensional smooth autonomous quadratic system generate a single four-scroll attractor? The interest is in the word single. Four-scroll pictures can be produced by two separate two-scroll attractors coexisting in the same phase space, which is a different object from one connected attractor with four scrolls.",
+      "The system they found carries one quadratic cross-product in each equation and no constant terms, in the form ẋ = ax − yz, ẏ = −by + xz, ż = −cz + xy. It displays a two-scroll attractor and, in the appropriate regime, a visually four-scroll one.",
+      "Work of this kind belongs to a period in the mid-2000s when the generalised-Lorenz classification had made it clear which structural features of a quadratic vector field control the number and arrangement of scrolls, and several groups set about constructing systems that would realise the possibilities the classification allowed."
+    ],
+    sources: ["https://link.springer.com/chapter/10.1007/978-3-319-00542-3_31", "https://www.sciencedirect.com/science/article/abs/pii/S0375960107010584"],
+    caveat: "The Liu and Chen 2004 attribution comes from secondary literature; the original paper was not retrieved, and this parameter set may not be the one it published."
+  },
+
+  "Sakarya": {
+    origin: "Associated with İbrahim Pehlivan and Yılmaz Uyaroğlu, Sakarya University",
+    text: [
+      "The Sakarya system is named for Sakarya University in Turkey, whose electrical and electronic engineering group — in particular İbrahim Pehlivan and Yılmaz Uyaroğlu — produced a series of three-dimensional chaotic systems in the late 2000s and 2010s. The system is described in that literature as a three-dimensional flow with two chaos parameters, derived by modifying the Lorenz system.",
+      "The equations here, ẋ = −x + y + yz, ẏ = −x − y + 0.4xz, ż = z − 0.3xy, show the group's characteristic emphasis. The linear part is simple and the nonlinearity is a single cross-product in each equation, which is exactly what makes a system straightforward to build from operational amplifiers and analogue multipliers — and circuit realisation, not abstract classification, is what this body of work is aimed at.",
+      "That orientation explains the applications the group pursued: analogue circuit implementations, image encryption, S-box design for block ciphers, and chaos-based random number generation. A chaotic system that cannot be built is of limited use for any of these, so the design constraint is buildability rather than mathematical novelty."
+    ],
+    sources: ["https://www.mdpi.com/1099-4300/20/1/12", "https://www.researchgate.net/publication/309209139_Basic_dynamical_analyses_and_electronic_circuit_implementation_of_a_new_3D_chaotic_system"],
+    caveat: "No primary paper naming this exact system Sakarya was located; the attribution to the Sakarya University group rests on secondary descriptions."
+  },
+
+  "Akgul-Pehlivan": {
+    origin: "Akif Akgül and İbrahim Pehlivan, 2016",
+    text: [
+      "Akif Akgül and İbrahim Pehlivan published this system in Tehnički Vjesnik 23(1) (2016), 209-214, as a new three-dimensional chaotic system without equilibrium points, together with its dynamical analysis and an electronic circuit implementation.",
+      "A system with no equilibria is a stronger statement than it sounds. The standard way to find a chaotic attractor is to locate an unstable equilibrium, perturb it, and follow where the trajectory goes; an attractor found that way is called self-excited. If a system has no equilibria at all, that method has nothing to start from, and every attractor it possesses is hidden — its basin touches no equilibrium, so it can only be found by knowing roughly where to look.",
+      "Hidden attractors became a serious topic in the 2010s after they were shown to matter in engineering practice, where a system can appear stable under every equilibrium-based test and still have a large-amplitude oscillation waiting in an untested corner of phase space. Akgül and Pehlivan's contribution was to give a no-equilibrium system that could be built as a circuit and shown to behave as analysed."
+    ],
+    sources: ["https://www.researchgate.net/publication/295254269_A_New_Three-Dimensional_Chaotic_System_Without_Equilibrium_Points_Its_Dynamical_Analyses_and_Electronic_Circuit_Application", "https://link.springer.com/chapter/10.1007/978-3-030-75821-9_4"]
+  },
+
+  "Rayleigh-Benard": {
+    origin: "Lorenz-form truncation of Rayleigh-Bénard convection",
+    text: [
+      "Rayleigh-Bénard convection is the canonical experiment in fluid instability: a layer of fluid heated from below and cooled from above. Below a critical temperature difference heat moves by conduction and nothing stirs; above it the layer breaks into rolls. What happens as the heating is increased further — steady rolls, then time-periodicity, quasiperiodicity, phase locking, chaos and crisis — is the standard route by which a continuous fluid becomes unpredictable.",
+      "Reducing the governing partial differential equations to three ordinary ones takes a severe truncation: assume two-dimensional rolls, expand the stream function and the temperature perturbation in Fourier series, and keep one mode of the first and two of the second. The result is the Lorenz system. The equations carried here are of exactly that form, ẋ = 9(y − x), ẏ = 12x − y − xz, ż = xy − 0.5z, differing from Lorenz's only in the constants.",
+      "Keeping it as a separate entry is defensible for the same reason the truncation is worth making twice: the Lorenz constants were chosen to sit in a chaotic regime far outside the range where three modes can be justified as a description of the fluid, and running the same skeleton at other constants shows how much of the picture depends on that choice."
+    ],
+    sources: ["https://www.sciencedirect.com/science/article/abs/pii/S0960077905006211", "https://www.sciencedirect.com/science/article/pii/S0307904X20303383"],
+    caveat: "No primary source names this exact parameter set; the entry describes the standard Lorenz-form truncation of the Rayleigh-Bénard problem, which these equations reproduce."
+  },
+
+  "Lorenz Mod 1": {
+    origin: "Modified Lorenz system, origin uncertain",
+    text: [
+      "This system and its companion circulate through visualisation software and attractor galleries under the Lorenz Mod names. The equations are not the Lorenz system with different constants; they are a different vector field, sharing only the ancestry implied by the name.",
+      "The structure is distinctive. The first equation, −αx + y² − z² + αβ, is quadratic in the two variables it does not govern and carries a constant term — a form closer to Lorenz's 1984 circulation model than to the 1963 convection one. The second and third couple x against a linear combination of y and z, with the factor 4 appearing in both; in Lorenz Mod 2 that factor becomes 5 and the sign of the z term flips.",
+      "The very small integration step used here, dt = 0.001, is a practical consequence of those squared terms: the vector field grows quickly away from the origin, and a larger step sends trajectories off to infinity rather than onto the attractor."
+    ],
+    sources: ["https://www.vorillaz.com/lorenz-mod-2-attractor/"],
+    caveat: "No primary source for this system was found. The name is what visualisation tools call it; the description above is drawn from the equations themselves rather than from a paper."
+  },
+
+  "Lorenz Mod 2": {
+    origin: "Modified Lorenz system, origin uncertain",
+    text: [
+      "The second of the pair, differing from Lorenz Mod 1 in three specific ways: the coupling factor is 5 rather than 4, the linear z term in the third equation is negative rather than positive, and the parameters are much larger — α = 0.9 against 0.1, β = 9.9 against 14, γ = 1 against 0.08.",
+      "Those changes produce a visibly different object. Where Mod 1 stays comparatively compact, Mod 2 opens into the broad, symmetric, many-looped shell that has made it a favourite of attractor galleries and 3D-printing projects. The two are best read as one family sampled at two points rather than as separate discoveries.",
+      "As with its companion, the attribution is the weak part. The equations are reproduced consistently across visualisation tools, but the chain of citation back to a paper is missing, and what can be said with confidence about the system comes from reading the vector field rather than from any published analysis."
+    ],
+    sources: ["https://www.vorillaz.com/lorenz-mod-2-attractor/", "https://www.shapeways.com/product/KFYWKY4JG/lorenz-mod-2-attractor"],
+    caveat: "No primary source for this system was found. The name is what visualisation tools call it; the description above is drawn from the equations themselves rather than from a paper."
+  },
+
+  "Genus-5 Multispiral": {
+    origin: "Moulay Aziz-Alaoui, 1999",
+    text: [
+      "Moulay Aziz-Alaoui introduced this system in Differential equations with multispiral attractors (International Journal of Bifurcation and Chaos 9, 1009-1039, 1999), achieving multispiral attractors in the non-autonomous case for the first time. The nonlinearity is piecewise-linear, with three regions set by thresholds and three slopes — the same construction principle as Chua's circuit, extended.",
+      "Multispiral means more than the double scroll that Chua's circuit is famous for: the piecewise-linear function is given enough breakpoints that the trajectory winds around a whole row of unstable regions rather than two. Standard parameters are α = 14.6, β = 12, γ = 0.9.",
+      "Genus-5 is a topological statement, and a precise one. Every chaotic attractor in three dimensions can be bounded by a surface, and the genus of that surface — the number of holes in it — is an invariant that does not change under smooth deformation. A Lorenz-like attractor is bounded by a genus-3 surface; this one needs genus 5. Martin Rosalie and Christophe Letellier developed the procedure for extracting templates from attractors bounded by high-genus tori and applied it here in 2014."
+    ],
+    sources: ["https://www.worldscientific.com/doi/10.1142/S0218127499000729", "http://www.atomosyd.net/spip.php?article137"]
+  },
+
+  "A Semi-Conductor Laser": {
+    origin: "Sebastian Wieczorek, Bernd Krauskopf and Daan Lenstra, 1999",
+    text: [
+      "This is a laser, described as a dynamical system. A single-mode class B semiconductor laser is fed monochromatic light from another laser — optical injection — and the question is what the injected light does to the output. Wieczorek, Krauskopf and Lenstra gave a unifying account of the bifurcations involved in Optics Communications 172 (1999), 279-295.",
+      "The three variables are physical: x and y are the components of the electric field inside the laser cavity, and z is the normalised population inversion, the excess of excited over unexcited carriers that makes amplification possible. The parameters are equally concrete — K is the strength of the injected field, α the linewidth enhancement factor coupling amplitude to phase, B the photon cavity lifetime and Γ the damping rate.",
+      "At K = 0.3, ω = 0, α = 8, B = 0.015 and Γ = 0.035 the attractor is toroidal, with a Kaplan-Yorke dimension of about 2.76. Konstantinos Chlouverakis and Julian Sprott proposed a simplified model in 2004 that produces comparable toroidal chaos at dimension 2.54, showing that much of the laser's behaviour survives considerable stripping-down. Optical injection remains a practical concern: it is how a laser is locked to a reference, and these bifurcations mark where the locking fails."
+    ],
+    sources: ["https://research-information.bris.ac.uk/en/publications/a-unifying-view-of-bifurcations-in-a-semiconductor-laser-subject-", "http://www.atomosyd.net/spip.php?article129"]
+  },
+
+  "Multi-folded Toroidal": {
+    origin: "Alexander Kuznetsov, Sergey Kuznetsov and Nataliya Stankevich, 2010",
+    text: [
+      "Alexander Kuznetsov, Sergey Kuznetsov and Nataliya Stankevich published this system in Communications in Nonlinear Science and Numerical Simulation 15 (2010), 1676-1681, under the title A simple autonomous quasiperiodic self-oscillator. Their thesis was economical: to produce chaos, it is enough to combine an oscillator with a nonlinear switch.",
+      "The physical picture is a relaxation oscillator. A capacitor charges slowly through a resistor until it reaches an ignition threshold, discharges rapidly, and begins again once the voltage falls to an extinction threshold — the circuit behind a flashing neon lamp. Coupled to an oscillator, this threshold behaviour is sufficient to generate quasiperiodic motion autonomously, with no external forcing supplying a second frequency.",
+      "The route to chaos is the Curry-Yorke scenario. As the parameter μ is reduced from above 1 the motion passes from periodic through quasiperiodic regimes interleaved with periodic windows; approaching the rotation axis, the torus on which the motion lives begins to fold. Progressive folding of an invariant torus turns quasiperiodicity into chaos, and the multi-folded toroidal structure that results is what the surface-of-section plots show."
+    ],
+    sources: ["https://www.researchgate.net/publication/222396257_A_simple_autonomous_quasiperiodic_self-oscillator", "http://www.atomosyd.net/spip.php?article220"]
+  },
+
+  "Unimodal Toroidal": {
+    origin: "Bo Deng, 1994",
+    text: [
+      "Bo Deng introduced this system in Constructing homoclinic orbits and chaotic attractors (International Journal of Bifurcation and Chaos 4, 1994, 823-841). The title states the method: rather than search parameter space for chaos and then analyse what turns up, build the homoclinic orbit that forces chaos and let the attractor follow.",
+      "Toroidal chaos is rare in three-dimensional autonomous continuous systems. Rössler produced a toroidal system in 1979, but it was not chaotic; Deng's is among the first to give chaos on a torus in this setting. The construction combines rotation with a radial constraint and a z-dependent amplitude modulation, which is what holds the torus topology in place while the dynamics on it becomes chaotic.",
+      "Unimodal refers to the first-return map. Taking a Poincaré section and plotting each crossing against the next gives a map with a single hump — one fold, not several. A unimodal map is the simplest object that can support a period-doubling cascade, and finding one here means the chaos on this torus is organised by a single folding mechanism rather than by several competing ones."
+    ],
+    sources: ["https://www.worldscientific.com/doi/abs/10.1142/S0218127494000599", "http://www.atomosyd.net/spip.php?article67"]
+  },
+
+  "Cord Attractor": {
+    origin: "Christophe Letellier and Luis A. Aguirre, 2012",
+    text: [
+      "The cord system was found by Christophe Letellier and Luis Aguirre in 2012, and by their own account Aguirre found it by mistake while working with variants of earlier systems. It is a modification of Lorenz's 1984 circulation model: the nonlinear terms in the first equation were replaced with linear equivalents, and the result turned out not to be equivalent to any known attractor.",
+      "The name comes from the shape — the main rotation seen in the y-z plane projection reads as a twisted cord. The system is also a standard example of poor observability: two of its three variables are bad choices for reconstructing the dynamics, in the sense that a time series of either one does not carry enough information to recover the attractor. Which variable you measure is not a free choice, and this system makes the point sharply.",
+      "Its first-return map is a smooth unimodal map whose decreasing branch becomes layered as a parameter is varied — a visible warning that a crisis is approaching. Past a boundary crisis at b ≈ 4.046 the attractor abruptly becomes much larger and considerably more complex."
+    ],
+    sources: ["http://www.atomosyd.net/spip.php?article185"]
+  },
+
+  "Torn Unimodal Chaos": {
+    origin: "Otto Rössler and Peter Ortoleva, 1978",
+    text: [
+      "Otto Rössler and Peter Ortoleva proposed this system in Strange attractors in 3-variable reaction systems (Lecture Notes in Biomathematics 21, 1978, 67-73). The setting is an abstract isothermal chemical reaction — chemistry at fixed temperature, where the irregularity cannot be blamed on thermal effects and must come from the reaction kinetics themselves.",
+      "Torn names the mechanism. Chaos in three dimensions is produced by stretching phase space and then bringing it back on itself, and there are two ways to do the second part: fold it, as the Rössler attractor does, or tear it, splitting the flow into sheets that are reassembled elsewhere, as the Lorenz attractor does. The two produce topologically different attractors, distinguishable by their branched manifolds.",
+      "What makes this system notable is that it tears without the rotational symmetry that the Lorenz system relies on, and produces an attractor bounded by a genus-1 torus. Its first-return map has the cusped shape of a Lorenz map while being genuinely unimodal. The result showed that tearing is not a consequence of symmetry, and that it arises in a plausible chemical setting rather than only in a convection caricature."
+    ],
+    sources: ["http://www.atomosyd.net/spip.php?article65"]
+  }
+
+};
+
+Object.assign(__exports, { HISTORY });
+
+});
+
+__def("drift.js", function (__exports, __req) {
+// Smooth, endless parameter motion for --continuous mode.
+//
+// The published parameter values are the ones that are known to put each system
+// on its attractor, so this wanders around them rather than exploring freely: a
+// sum of two slow sinusoids per parameter, centred on the published value. Both
+// sinusoids start at zero phase, so the drift begins exactly where the spin-up
+// left off and there is no jump when it starts.
+//
+// The periods of the two waves are incommensurate, and every parameter gets a
+// different pair, so the combination never comes back round to where it began.
+
+const PHI = 1.618033988749895;
+
+class Drift {
+  // `amplitude` is a fraction of each published value; `period` the base swing
+  // in seconds. A parameter published as exactly zero has no scale of its own,
+  // so it gets `zeroAmplitude` in absolute terms instead.
+  constructor({ amplitude = 0.12, period = 55, zeroAmplitude = 0.05 } = {}) {
+    this.amplitude = amplitude;
+    this.period = period;
+    this.zeroAmplitude = zeroAmplitude;
+    this.clock = 0;
+    this.base = {};
+    this.keys = [];
+  }
+
+  reset(attractor) {
+    this.clock = 0;
+    this.base = { ...(attractor.params || {}) };
+    this.keys = Object.keys(this.base);
+  }
+
+  advance(dt, sim) {
+    if (!this.keys.length) return;
+    this.clock += dt;
+    const t = this.clock;
+    for (let i = 0; i < this.keys.length; i++) {
+      const key = this.keys[i];
+      const v = this.base[key];
+      const amp = v === 0 ? this.zeroAmplitude : Math.abs(v) * this.amplitude;
+      const w1 = (2 * Math.PI) / (this.period * (1 + i * 0.31));
+      const w2 = (2 * Math.PI) / (this.period * PHI * (1 + i * 0.17));
+      sim.params[key] = v + amp * (0.68 * Math.sin(w1 * t) + 0.32 * Math.sin(w2 * t));
+    }
+  }
+
+  // Current values, for the readout under the title.
+  values(sim) {
+    const out = {};
+    for (const key of this.keys) out[key] = sim.params[key];
+    return out;
+  }
+}
+
+Object.assign(__exports, { Drift });
+
+});
+return __req('embed.js');
+})();
+
+const config = window.VIZDYN_CONFIG || {};
+const $ = id => document.getElementById(id);
+
+try {
+  const handle = mount({
+    canvas: $('c'),
+    duration: 0,
+    particles: config.particles ?? 1024,
+    steps: config.steps ?? 160,
+    theme: config.theme ?? 'dark',
+    oled: config.theme !== 'paper',
+    systems: config.systems,
+    pinned: config.pinned,
+    palette: config.palette ?? null,
+    zoom: config.zoom ?? 1,
+    trail: config.trail ?? null,
+    post: config.post ?? {},
+    flat: config.flat ?? null,
+    onChange: info => {
+      $('name').textContent = info.name;
+      $('eq').textContent = info.equations.join('\n');
+      document.body.classList.toggle('paper', /Notebook|Reusser|Blueprint|Risograph/.test(info.palette));
+    }
+  });
+  handle.play();
+
+  const view = handle.view;
+  const sync = () => {
+    const flat = view.target > 0.5;
+    for (const b of $('mode').children) b.classList.toggle('on', (b.dataset.mode === '2d') === flat);
+    const plane = (view.pending ? view.pending : view.axes).slice(0, 2).map(i => 'xyz'[i]).join('');
+    for (const b of $('plane').children) b.classList.toggle('on', b.dataset.plane === plane);
+    $('depthAxis').textContent = 'xyz'[(view.pending || view.axes)[2]];
+    $('slice').checked = view.slice.on;
+    $('sliceVal').textContent = `${'xyz'[view.axes[2]]} = ${view.sliceValue.toPrecision(3)}`;
+  };
+
+  $('mode').addEventListener('click', e => {
+    const m = e.target.dataset.mode;
+    if (m) { handle.setFlat(m === '2d'); sync(); }
+  });
+  $('plane').addEventListener('click', e => {
+    const p = e.target.dataset.plane;
+    if (p) { handle.setPlane(p); sync(); }
+  });
+  $('slice').addEventListener('change', e => { handle.setSlice({ on: e.target.checked }); sync(); });
+  $('sliceAt').addEventListener('input', e => { handle.setSlice({ at: +e.target.value }); sync(); });
+  $('sliceThick').addEventListener('input', e => { handle.setSlice({ thickness: +e.target.value }); sync(); });
+  addEventListener('keydown', e => {
+    if (e.target.tagName === 'INPUT') return;
+    const k = e.key.toLowerCase();
+    if (k === 'f') handle.toggleFlat();
+    else if (k === '1') handle.setPlane('xy');
+    else if (k === '2') handle.setPlane('xz');
+    else if (k === '3') handle.setPlane('yz');
+    else if (k === 's') handle.setSlice({ on: !view.slice.on });
+    else return;
+    sync();
+  });
+  setInterval(sync, 250);  // the plane swap completes on its own; keep the buttons honest
+  sync();
+} catch (err) {
+  $('error').textContent = String(err && err.stack || err);
+  $('error').classList.add('show');
+  console.error(err);
+}
+</script>
+</body>
+</html>

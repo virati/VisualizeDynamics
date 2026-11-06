@@ -1,0 +1,138 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Flow viewer</title>
+<style>
+  :root {
+    --bg: #000; --fg: #e8edf5; --muted: #9aa4b2; --panel: rgba(12, 14, 20, 0.72);
+    --line: rgba(255, 255, 255, 0.14); --accent: #8de2a7;
+  }
+  body.paper {
+    --fg: #1a1a1a; --muted: #5b6370; --panel: rgba(255, 255, 255, 0.82);
+    --line: rgba(0, 0, 0, 0.12); --accent: #1c51a6;
+  }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--fg); overflow: hidden;
+    font: 13px/1.4 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; }
+  canvas { position: fixed; inset: 0; width: 100%; height: 100%; display: block; cursor: grab; touch-action: none; }
+  canvas:active { cursor: grabbing; }
+  .panel { position: fixed; background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
+    padding: 8px 10px; backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px); }
+  #controls { top: 10px; left: 10px; display: flex; flex-direction: column; gap: 8px; min-width: 210px; }
+  .row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+  .seg { display: inline-flex; border: 1px solid var(--line); border-radius: 7px; overflow: hidden; }
+  .seg button { background: transparent; color: var(--fg); border: 0; padding: 4px 10px; font: inherit; cursor: pointer; }
+  .seg button + button { border-left: 1px solid var(--line); }
+  .seg button.on { background: var(--accent); color: var(--bg); }
+  body.paper .seg button.on { color: #fff; }
+  label { color: var(--muted); font-size: 12px; }
+  input[type=range] { width: 120px; accent-color: var(--accent); }
+  .val { font-variant-numeric: tabular-nums; color: var(--fg); min-width: 7ch; font-size: 12px; }
+  #info { left: 10px; bottom: 10px; max-width: min(560px, calc(100% - 40px)); }
+  #name { font-weight: 600; font-size: 14px; }
+  #eq { white-space: pre-wrap; font: 12px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--muted);
+    margin-top: 4px; max-height: 7.5em; overflow: auto; }
+  .keys { color: var(--muted); font-size: 11px; }
+  #error { position: fixed; inset: 20px; white-space: pre-wrap; color: #ff8080; font: 12px ui-monospace, monospace; display: none; }
+  #error.show { display: block; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+
+<div id="controls" class="panel">
+  <div class="row">
+    <div class="seg" id="mode"><button data-mode="3d" class="on">3D</button><button data-mode="2d">2D</button></div>
+    <div class="seg" id="plane"><button data-plane="xy" class="on">x–y</button><button data-plane="xz">x–z</button><button data-plane="yz">y–z</button></div>
+  </div>
+  <div class="row">
+    <label><input type="checkbox" id="slice"> Slice along <span id="depthAxis">z</span></label>
+  </div>
+  <div class="row"><label for="sliceAt">at</label><input type="range" id="sliceAt" min="0" max="1" step="0.001" value="0.5"><span class="val" id="sliceVal"></span></div>
+  <div class="row"><label for="sliceThick">thickness</label><input type="range" id="sliceThick" min="0.005" max="0.5" step="0.001" value="0.08"></div>
+  <div class="keys">F flat/3-D · 1 2 3 planes · S slice · drag to orbit · wheel to zoom</div>
+</div>
+
+<div id="info" class="panel">
+  <div id="name"></div>
+  <div id="eq"></div>
+</div>
+<div id="error"></div>
+
+<script>
+// Filled in by vizdyn.gpu.render_html: { systems, pinned, palette, theme, ... }.
+window.VIZDYN_CONFIG = /*CONFIG*/null;
+</script>
+<script type="module">
+import { mount } from './src/embed.js';
+
+const config = window.VIZDYN_CONFIG || {};
+const $ = id => document.getElementById(id);
+
+try {
+  const handle = mount({
+    canvas: $('c'),
+    duration: 0,
+    particles: config.particles ?? 1024,
+    steps: config.steps ?? 160,
+    theme: config.theme ?? 'dark',
+    oled: config.theme !== 'paper',
+    systems: config.systems,
+    pinned: config.pinned,
+    palette: config.palette ?? null,
+    zoom: config.zoom ?? 1,
+    trail: config.trail ?? null,
+    post: config.post ?? {},
+    flat: config.flat ?? null,
+    onChange: info => {
+      $('name').textContent = info.name;
+      $('eq').textContent = info.equations.join('\n');
+      document.body.classList.toggle('paper', /Notebook|Reusser|Blueprint|Risograph/.test(info.palette));
+    }
+  });
+  handle.play();
+
+  const view = handle.view;
+  const sync = () => {
+    const flat = view.target > 0.5;
+    for (const b of $('mode').children) b.classList.toggle('on', (b.dataset.mode === '2d') === flat);
+    const plane = (view.pending ? view.pending : view.axes).slice(0, 2).map(i => 'xyz'[i]).join('');
+    for (const b of $('plane').children) b.classList.toggle('on', b.dataset.plane === plane);
+    $('depthAxis').textContent = 'xyz'[(view.pending || view.axes)[2]];
+    $('slice').checked = view.slice.on;
+    $('sliceVal').textContent = `${'xyz'[view.axes[2]]} = ${view.sliceValue.toPrecision(3)}`;
+  };
+
+  $('mode').addEventListener('click', e => {
+    const m = e.target.dataset.mode;
+    if (m) { handle.setFlat(m === '2d'); sync(); }
+  });
+  $('plane').addEventListener('click', e => {
+    const p = e.target.dataset.plane;
+    if (p) { handle.setPlane(p); sync(); }
+  });
+  $('slice').addEventListener('change', e => { handle.setSlice({ on: e.target.checked }); sync(); });
+  $('sliceAt').addEventListener('input', e => { handle.setSlice({ at: +e.target.value }); sync(); });
+  $('sliceThick').addEventListener('input', e => { handle.setSlice({ thickness: +e.target.value }); sync(); });
+  addEventListener('keydown', e => {
+    if (e.target.tagName === 'INPUT') return;
+    const k = e.key.toLowerCase();
+    if (k === 'f') handle.toggleFlat();
+    else if (k === '1') handle.setPlane('xy');
+    else if (k === '2') handle.setPlane('xz');
+    else if (k === '3') handle.setPlane('yz');
+    else if (k === 's') handle.setSlice({ on: !view.slice.on });
+    else return;
+    sync();
+  });
+  setInterval(sync, 250);  // the plane swap completes on its own; keep the buttons honest
+  sync();
+} catch (err) {
+  $('error').textContent = String(err && err.stack || err);
+  $('error').classList.add('show');
+  console.error(err);
+}
+</script>
+</body>
+</html>
